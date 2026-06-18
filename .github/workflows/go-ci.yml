@@ -22,6 +22,13 @@ on:
         type: string
         required: false
         default: ""
+      gofmt:
+        description: >-
+          gofmt enforcement: 'error' fails the job on unformatted files,
+          'warn' annotates them but passes, 'off' skips the check.
+        type: string
+        required: false
+        default: error
       timeout-minutes:
         type: number
         required: false
@@ -46,10 +53,17 @@ jobs:
           cache-dependency-path: ${{ inputs.working-directory }}/go.sum
 
       - name: Lint — gofmt
+        if: ${{ inputs.gofmt != 'off' }}
+        env:
+          GOFMT_MODE: ${{ inputs.gofmt }}
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
-            echo "::error::gofmt found unformatted files:"; echo "$unformatted"; exit 1
+            if [ "$GOFMT_MODE" = "warn" ]; then
+              echo "::warning::gofmt found unformatted files (non-blocking):"; echo "$unformatted"
+            else
+              echo "::error::gofmt found unformatted files:"; echo "$unformatted"; exit 1
+            fi
           fi
 
       - name: Lint — go vet
