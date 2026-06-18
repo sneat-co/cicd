@@ -1,0 +1,59 @@
+name: Nx CI (reusable)
+
+# Reusable workflow: pnpm install + `nx run-many` over the given targets for an
+# Nx workspace. Call from a consumer repo:
+#
+#   jobs:
+#     frontend:
+#       uses: sneat-co/cicd/.github/workflows/nx-ci.yml@main
+#       with:
+#         working-directory: frontend
+#         targets: "lint test build"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the Nx workspace (package.json / pnpm-lock.yaml)
+        type: string
+        required: false
+        default: frontend
+      targets:
+        description: Space-separated Nx targets passed to `nx run-many -t`
+        type: string
+        required: false
+        default: "lint test build"
+      node-version:
+        type: string
+        required: false
+        default: "22"
+      pnpm-version:
+        type: string
+        required: false
+        default: "11"
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+
+jobs:
+  nx:
+    name: lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm + Node
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Nx run-many
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm exec nx run-many -t ${{ inputs.targets }}

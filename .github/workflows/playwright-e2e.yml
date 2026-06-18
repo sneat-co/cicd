@@ -1,0 +1,93 @@
+name: Playwright E2E (reusable)
+
+# Reusable workflow: run Playwright e2e for an Nx app. Typically called with a
+# `needs: [backend, frontend]` gate so it only runs when both succeed:
+#
+#   jobs:
+#     e2e:
+#       needs: [backend, frontend]
+#       uses: sneat-co/cicd/.github/workflows/playwright-e2e.yml@main
+#       with:
+#         working-directory: frontend
+#         e2e-project-directory: frontend/apps/assetus-app-e2e
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the Nx workspace (for install)
+        type: string
+        required: false
+        default: frontend
+      e2e-project-directory:
+        description: Directory of the Playwright e2e project (where playwright.config lives)
+        type: string
+        required: true
+      project:
+        description: Playwright --project to run
+        type: string
+        required: false
+        default: chromium
+      node-version:
+        type: string
+        required: false
+        default: "22"
+      pnpm-version:
+        type: string
+        required: false
+        default: "11"
+      timeout-minutes:
+        type: number
+        required: false
+        default: 25
+
+jobs:
+  e2e:
+    name: e2e (${{ inputs.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm + Node
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Get Playwright version
+        id: pw
+        run: echo "version=$(pnpm exec playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright (browsers + deps)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install ${{ inputs.project }} --with-deps
+
+      - name: Install Playwright system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps ${{ inputs.project }}
+
+      - name: Run e2e
+        working-directory: ${{ inputs.e2e-project-directory }}
+        run: pnpm exec playwright test --project=${{ inputs.project }}
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: ${{ inputs.working-directory }}/dist/.playwright
+          if-no-files-found: ignore
+          retention-days: 14

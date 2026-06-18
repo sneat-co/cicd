@@ -1,0 +1,62 @@
+name: Go CI (reusable)
+
+# Reusable workflow: lint (gofmt + go vet), test and build a Go module.
+# Call from a consumer repo:
+#
+#   jobs:
+#     backend:
+#       uses: sneat-co/cicd/.github/workflows/go-ci.yml@main
+#       with:
+#         working-directory: backend
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing go.mod
+        type: string
+        required: false
+        default: backend
+      go-version-file:
+        description: Path to the go.mod used to resolve the Go version
+        type: string
+        required: false
+        default: ""
+      timeout-minutes:
+        type: number
+        required: false
+        default: 15
+
+jobs:
+  go:
+    name: lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ inputs.go-version-file != '' && inputs.go-version-file || format('{0}/go.mod', inputs.working-directory) }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Lint — gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Lint — go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...

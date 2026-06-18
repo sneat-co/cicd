@@ -1,0 +1,42 @@
+name: Setup pnpm + Node
+description: >-
+  Installs pnpm and Node (with pnpm-store cache) and runs a frozen-lockfile
+  install in the given working directory. Shared by the Nx and Playwright
+  reusable workflows.
+
+inputs:
+  working-directory:
+    description: Directory containing package.json / pnpm-lock.yaml
+    required: false
+    default: frontend
+  node-version:
+    description: Node.js version
+    required: false
+    default: "22"
+  pnpm-version:
+    description: pnpm major version
+    required: false
+    default: "11"
+  install:
+    description: Whether to run `pnpm install --frozen-lockfile`
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v6
+      with:
+        version: ${{ inputs.pnpm-version }}
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Install dependencies
+      if: ${{ inputs.install == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm install --frozen-lockfile
