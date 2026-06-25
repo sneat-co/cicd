@@ -15,6 +15,7 @@ a few lines long and upgrades happen once.
 | `go-ci.yml` | Lint (`gofmt` + `go vet`), `go test`, `go build` a Go module | `working-directory` (default `backend`); `gofmt` = `error` (default, fail on unformatted) / `warn` (annotate only) / `off` |
 | `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version` |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
+| `cf-deploy.yml` | Build an Nx app and deploy to Cloudflare (Workers static assets) via wrangler | `build-target` (required), `working-directory` (default `frontend`), `wrangler-config` (default `wrangler.jsonc`); secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 
 ### Composite action (`actions/`)
 

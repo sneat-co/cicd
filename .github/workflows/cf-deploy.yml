@@ -1,0 +1,81 @@
+name: Cloudflare Deploy (reusable)
+
+# Reusable workflow: build an Nx app and deploy it to Cloudflare (Workers
+# static assets) with wrangler. Implements the "Sharing & reuse" decision in
+# backstage spec/features/site-hosting-pattern. Call from a consumer repo:
+#
+#   jobs:
+#     deploy:
+#       uses: sneat-co/cicd/.github/workflows/cf-deploy.yml@main
+#       with:
+#         working-directory: frontend
+#         build-target: gameboard-app          # pnpm exec nx build <build-target>
+#         wrangler-config: wrangler.jsonc       # relative to working-directory
+#       secrets:
+#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the Nx workspace (package.json / pnpm-lock.yaml)
+        type: string
+        required: false
+        default: frontend
+      build-target:
+        description: Nx app to build (`pnpm exec nx build <build-target>`)
+        type: string
+        required: true
+      wrangler-config:
+        description: Path to the wrangler config, relative to working-directory
+        type: string
+        required: false
+        default: wrangler.jsonc
+      node-version:
+        type: string
+        required: false
+        default: "22"
+      pnpm-version:
+        type: string
+        required: false
+        default: "11"
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+jobs:
+  deploy:
+    name: build · deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm + Node
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm exec nx build ${{ inputs.build-target }}
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ inputs.working-directory }}
+          command: deploy --config ${{ inputs.wrangler-config }}
