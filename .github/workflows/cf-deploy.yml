@@ -1,16 +1,28 @@
 name: Cloudflare Deploy (reusable)
 
-# Reusable workflow: build an Nx app and deploy it to Cloudflare (Workers
-# static assets) with wrangler. Implements the "Sharing & reuse" decision in
-# backstage spec/features/site-hosting-pattern. Call from a consumer repo:
+# Reusable workflow: build a project and deploy it to Cloudflare (Workers static
+# assets) with wrangler. Implements the "Sharing & reuse" decision in backstage
+# spec/features/site-hosting-pattern.
 #
+# Supports three build shapes via `build-command` (falls back to Nx for back-compat):
+#
+#   # 1) Nx app (original behaviour — unchanged for existing callers)
+#   with: { working-directory: frontend, build-target: gameboard-app }
+#
+#   # 2) Pure Astro landing
+#   with: { working-directory: landings, build-command: pnpm exec astro build }
+#
+#   # 3) Astro landing + root-mounted Angular app (assembled into one dist/)
+#   with:
+#     working-directory: landings
+#     build-command: pnpm build            # astro build && build:app && assemble
+#     extra-install-directory: .           # also install the repo-root Nx workspace
+#
+# Call from a consumer repo:
 #   jobs:
 #     deploy:
 #       uses: sneat-co/cicd/.github/workflows/cf-deploy.yml@main
-#       with:
-#         working-directory: frontend
-#         build-target: gameboard-app          # pnpm exec nx build <build-target>
-#         wrangler-config: wrangler.jsonc       # relative to working-directory
+#       with: { working-directory: landings, build-command: pnpm exec astro build }
 #       secrets:
 #         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 #         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -19,14 +31,29 @@ on:
   workflow_call:
     inputs:
       working-directory:
-        description: Directory containing the Nx workspace (package.json / pnpm-lock.yaml)
+        description: Directory to build + deploy from (has its own package.json / lockfile)
         type: string
         required: false
         default: frontend
-      build-target:
-        description: Nx app to build (`pnpm exec nx build <build-target>`)
+      build-command:
+        description: >-
+          Shell command to build (run in working-directory). When empty, falls
+          back to `pnpm exec nx build <build-target>`.
         type: string
-        required: true
+        required: false
+        default: ""
+      build-target:
+        description: Nx app to build when build-command is empty (`pnpm exec nx build <target>`)
+        type: string
+        required: false
+        default: ""
+      extra-install-directory:
+        description: >-
+          Optional second directory to install deps in before building (e.g. the
+          repo-root Nx workspace for landings that assemble a root-mounted app).
+        type: string
+        required: false
+        default: ""
       wrangler-config:
         description: Path to the wrangler config, relative to working-directory
         type: string
@@ -61,16 +88,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup pnpm + Node
+      - name: Setup pnpm + Node (build workspace)
         uses: sneat-co/cicd/actions/setup-pnpm-node@main
         with:
           working-directory: ${{ inputs.working-directory }}
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
 
+      - name: Setup pnpm + Node (extra workspace)
+        if: ${{ inputs.extra-install-directory != '' }}
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.extra-install-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
       - name: Build
         working-directory: ${{ inputs.working-directory }}
-        run: pnpm exec nx build ${{ inputs.build-target }}
+        run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3
