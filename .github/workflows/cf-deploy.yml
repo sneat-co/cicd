@@ -56,10 +56,10 @@ on:
         default: ""
       cloudflare-account-id:
         description: >-
-          Cloudflare account ID. The account ID is not a secret (it appears in
-          dashboard URLs), so callers should pass it from an org/repo VARIABLE:
-          `cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}`. When empty,
-          falls back to the CLOUDFLARE_ACCOUNT_ID secret for back-compat.
+          Cloudflare account ID (an identifier, not a secret — it appears in
+          dashboard URLs). Callers pass it from an org/repo variable via this
+          input. When empty, falls back to the CLOUDFLARE_ACCOUNT_ID secret for
+          back-compat.
         type: string
         required: false
         default: ""
