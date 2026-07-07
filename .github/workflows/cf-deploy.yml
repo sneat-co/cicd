@@ -54,6 +54,15 @@ on:
         type: string
         required: false
         default: ""
+      cloudflare-account-id:
+        description: >-
+          Cloudflare account ID. The account ID is not a secret (it appears in
+          dashboard URLs), so callers should pass it from an org/repo VARIABLE:
+          `cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}`. When empty,
+          falls back to the CLOUDFLARE_ACCOUNT_ID secret for back-compat.
+        type: string
+        required: false
+        default: ""
       wrangler-config:
         description: Path to the wrangler config, relative to working-directory
         type: string
@@ -75,7 +84,9 @@ on:
       CLOUDFLARE_API_TOKEN:
         required: true
       CLOUDFLARE_ACCOUNT_ID:
-        required: true
+        # Optional / legacy: prefer the `cloudflare-account-id` input fed from a
+        # VARIABLE. Kept for back-compat with callers that still pass it here.
+        required: false
 
 jobs:
   deploy:
@@ -111,6 +122,6 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ inputs.cloudflare-account-id != '' && inputs.cloudflare-account-id || secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ inputs.working-directory }}
           command: deploy --config ${{ inputs.wrangler-config }}
