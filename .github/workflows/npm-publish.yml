@@ -1,0 +1,103 @@
+name: NPM publish (reusable)
+
+# Reusable workflow: install dependencies, optionally build, then publish one
+# or more npm packages from the caller repository.
+#
+# Call from a consumer repo:
+#
+#   jobs:
+#     publish:
+#       uses: sneat-co/cicd/.github/workflows/npm-publish.yml@main
+#       with:
+#         working-directory: frontend
+#         build-command: pnpm nx build ext-foo-contract
+#         publish-command: pnpm nx release publish --projects=ext-foo-contract
+#       secrets: inherit
+#
+# Authentication:
+# - This workflow expects `NPM_TOKEN` to be available to the caller repo.
+# - npm automation/granular tokens now expire every 90 days, so the org secret
+#   must be renewed regularly or publishes will start failing.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing package.json / pnpm-lock.yaml
+        type: string
+        required: false
+        default: frontend
+      ref:
+        description: Optional git ref to check out before publishing
+        type: string
+        required: false
+        default: ""
+      install-command:
+        description: Command used to install dependencies
+        type: string
+        required: false
+        default: pnpm install --frozen-lockfile
+      build-command:
+        description: Optional build command run before publish
+        type: string
+        required: false
+        default: ""
+      publish-command:
+        description: Publish command
+        type: string
+        required: true
+      node-version:
+        type: string
+        required: false
+        default: "22"
+      pnpm-version:
+        type: string
+        required: false
+        default: "11"
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Build packages
+        if: ${{ inputs.build-command != '' }}
+        run: ${{ inputs.build-command }}
+
+      - name: Publish packages
+        run: ${{ inputs.publish-command }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
