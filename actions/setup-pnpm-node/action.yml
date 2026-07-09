@@ -14,7 +14,10 @@ inputs:
     required: false
     default: "22"
   pnpm-version:
-    description: pnpm major version
+    description: >-
+      pnpm major version. Ignored automatically when the working directory's
+      package.json declares a packageManager field (pnpm/action-setup rejects
+      having both).
     required: false
     default: "11"
   install:
@@ -25,7 +28,21 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Detect packageManager field
+      id: pm
+      shell: bash
+      run: |
+        if grep -q '"packageManager"' "${{ inputs.working-directory }}/package.json" 2>/dev/null; then
+          echo "declared=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "declared=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - uses: pnpm/action-setup@v6
+      if: steps.pm.outputs.declared == 'true'
+
+    - uses: pnpm/action-setup@v6
+      if: steps.pm.outputs.declared == 'false'
       with:
         version: ${{ inputs.pnpm-version }}
 
