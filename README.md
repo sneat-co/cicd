@@ -15,13 +15,50 @@ a few lines long and upgrades happen once.
 | `go-ci.yml` | Lint (`gofmt` + `go vet`), `go test`, `go build` a Go module | `working-directory` (default `backend`); `gofmt` = `error` (default, fail on unformatted) / `warn` (annotate only) / `off` |
 | `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version` |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
-| `cf-deploy.yml` | Build an Nx app and deploy to Cloudflare (Workers static assets) via wrangler | `build-target` (required), `working-directory` (default `frontend`), `wrangler-config` (default `wrangler.jsonc`); secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
+| `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke); secret `CLOUDFLARE_API_TOKEN` |
 
 ### Composite action (`actions/`)
 
 | Action | Purpose |
 |--------|---------|
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. Used by `nx-ci.yml` and `playwright-e2e.yml`. |
+
+## Deploy auth (org-level, one place)
+
+Cloudflare deploys via `cf-deploy.yml` authenticate with two org-level values
+(no per-repo secrets needed):
+
+- **`CLOUDFLARE_API_TOKEN`** — org **secret** (Workers Scripts:Edit; Workers
+  Routes / Zone:DNS:Edit only needed when CI must (re)attach custom domains).
+- **`CLOUDFLARE_ACCOUNT_ID`** — org **variable** (an identifier, not a secret;
+  it appears in dashboard URLs). Callers pass it as the
+  `cloudflare-account-id` input: `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`.
+  Passing it explicitly avoids wrangler's `/memberships` auto-detect, which a
+  scoped token can't call.
+
+The canonical consumer shape:
+
+```yaml
+# .github/workflows/deploy-landings.yml in the consumer repo
+name: Deploy landing (Cloudflare)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [landings/**]
+
+jobs:
+  deploy:
+    uses: sneat-co/cicd/.github/workflows/cf-deploy.yml@main
+    with:
+      working-directory: landings
+      build-command: pnpm build
+      cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      # extra-install-directory: "."      # when the landing assembles a root-mounted app
+      # smoke-command: node scripts/post-deploy-smoke.mjs https://example.com
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
 
 ## Usage
 

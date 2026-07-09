@@ -18,14 +18,20 @@ name: Cloudflare Deploy (reusable)
 #     build-command: pnpm build            # astro build && build:app && assemble
 #     extra-install-directory: .           # also install the repo-root Nx workspace
 #
-# Call from a consumer repo:
+# Optional: `smoke-command` runs after a successful deploy (post-deploy smoke).
+#
+# Call from a consumer repo (auth: org-level CLOUDFLARE_API_TOKEN secret +
+# CLOUDFLARE_ACCOUNT_ID org variable — the account id is an identifier, not a
+# secret):
 #   jobs:
 #     deploy:
 #       uses: sneat-co/cicd/.github/workflows/cf-deploy.yml@main
-#       with: { working-directory: landings, build-command: pnpm exec astro build }
+#       with:
+#         working-directory: landings
+#         build-command: pnpm build
+#         cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 #       secrets:
 #         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
 on:
   workflow_call:
@@ -68,6 +74,14 @@ on:
         type: string
         required: false
         default: wrangler.jsonc
+      smoke-command:
+        description: >-
+          Optional post-deploy smoke command run in working-directory after a
+          successful deploy (e.g. `node scripts/post-deploy-smoke.mjs
+          https://example.com`). Fails the job if it exits non-zero.
+        type: string
+        required: false
+        default: ""
       node-version:
         type: string
         required: false
@@ -125,3 +139,8 @@ jobs:
           accountId: ${{ inputs.cloudflare-account-id != '' && inputs.cloudflare-account-id || secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ inputs.working-directory }}
           command: deploy --config ${{ inputs.wrangler-config }}
+
+      - name: Post-deploy smoke test
+        if: ${{ inputs.smoke-command != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.smoke-command }}
