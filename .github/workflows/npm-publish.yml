@@ -53,9 +53,7 @@ on:
       pnpm-version:
         type: string
         required: false
-        # Pinned: pnpm 11.12.0's self-installer is broken ("Cannot use 'in' operator
-        # to search for 'integrity' in undefined") and fails every publish. 11.9.0 is known-good.
-        default: "11.9.0"
+        default: "11.12.0"
       timeout-minutes:
         type: number
         required: false
@@ -78,18 +76,25 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: ${{ inputs.pnpm-version }}
-
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://registry.npmjs.org
-          cache: pnpm
-          cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+      - name: Install pnpm
+        run: npm install --global "pnpm@${{ inputs.pnpm-version }}"
+
+      - name: Get pnpm store path
+        id: pnpm
+        run: echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm.outputs.store-path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles(format('{0}/pnpm-lock.yaml', inputs.working-directory)) }}
+          restore-keys: ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
         run: ${{ inputs.install-command }}
