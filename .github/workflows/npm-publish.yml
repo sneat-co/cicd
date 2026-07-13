@@ -53,9 +53,7 @@ on:
       pnpm-version:
         type: string
         required: false
-        # Pinned: pnpm 11.12.0's self-installer is broken ("Cannot use 'in' operator
-        # to search for 'integrity' in undefined") and fails every publish. 11.9.0 is known-good.
-        default: "11.9.0"
+        default: "11.12.0"
       timeout-minutes:
         type: number
         required: false
@@ -82,6 +80,7 @@ jobs:
         uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
+          standalone: true
 
       - name: Set up Node
         uses: actions/setup-node@v6

@@ -19,12 +19,9 @@ inputs:
       package.json declares a packageManager field: pnpm/action-setup reads
       its default package_json_file at the workspace root (NOT the working
       directory) and rejects having both that field and a version input.
-      Pinned to an exact version (not the "11" major tag): pnpm 11.12.0's
-      self-installer throws "Cannot use 'in' operator to search for
-      'integrity' in undefined", so resolving the latest 11.x broke every
-      deploy on 2026-07-12. Bump deliberately after verifying a release.
+      Pinned to an exact version (not the "11" major tag) for reproducibility.
     required: false
-    default: "11.9.0"
+    default: "11.12.0"
   install:
     description: Whether to run `pnpm install --frozen-lockfile`
     required: false
@@ -56,6 +53,9 @@ runs:
       if: steps.pm.outputs.declared == 'false'
       with:
         version: ${{ inputs.pnpm-version }}
+        # pnpm 11.12.0 cannot upgrade the action's bundled pnpm in-place.
+        # The officially supported standalone mode installs @pnpm/exe instead.
+        standalone: true
 
     - uses: actions/setup-node@v6
       with:
