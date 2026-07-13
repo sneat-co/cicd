@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup pnpm + Node
-        uses: sneat-co/cicd/actions/setup-pnpm-node@agent/support-pnpm-11-12
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
         with:
           working-directory: ${{ inputs.working-directory }}
           node-version: ${{ inputs.node-version }}
