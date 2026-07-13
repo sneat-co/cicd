@@ -15,10 +15,8 @@ inputs:
     default: "22"
   pnpm-version:
     description: >-
-      Exact pnpm version. Ignored automatically when the REPO-ROOT
-      package.json declares a packageManager field: pnpm/action-setup reads
-      its default package_json_file at the workspace root (NOT the working
-      directory) and rejects having both that field and a version input.
+      Exact pnpm version. Ignored automatically when the repository-root
+      package.json declares a pnpm packageManager version.
       Pinned to an exact version (not the "11" major tag) for reproducibility.
     required: false
     default: "11.12.0"
@@ -30,38 +28,31 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Detect packageManager field
-      id: pm
-      shell: bash
-      # pnpm/action-setup@v6 resolves packageManager from its
-      # package_json_file input, which defaults to the REPO-ROOT
-      # package.json — irrespective of our working-directory input. So the
-      # root file is the one that decides whether passing a version input
-      # would conflict (sneat-apps deploy run 29057096563: root declares
-      # pnpm@11.0.9 while landings/package.json declares nothing).
-      run: |
-        if grep -q '"packageManager"' package.json 2>/dev/null; then
-          echo "declared=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "declared=false" >> "$GITHUB_OUTPUT"
-        fi
-
-    - uses: pnpm/action-setup@v6
-      if: steps.pm.outputs.declared == 'true'
-
-    - uses: pnpm/action-setup@v6
-      if: steps.pm.outputs.declared == 'false'
-      with:
-        version: ${{ inputs.pnpm-version }}
-        # pnpm 11.12.0 cannot upgrade the action's bundled pnpm in-place.
-        # The officially supported standalone mode installs @pnpm/exe instead.
-        standalone: true
-
     - uses: actions/setup-node@v6
       with:
         node-version: ${{ inputs.node-version }}
-        cache: pnpm
-        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Install pnpm
+      id: pnpm
+      shell: bash
+      run: |
+        version="${{ inputs.pnpm-version }}"
+        if [[ -f package.json ]]; then
+          declared="$(node -p "const p=require('./package.json').packageManager || ''; p.startsWith('pnpm@') ? p.slice(5).split('+')[0] : ''")"
+          if [[ -n "$declared" ]]; then
+            version="$declared"
+          fi
+        fi
+        npm install --global "pnpm@$version"
+        echo "Installed pnpm $(pnpm --version)"
+        echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache pnpm store
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.pnpm.outputs.store-path }}
+        key: ${{ runner.os }}-pnpm-${{ hashFiles(format('{0}/pnpm-lock.yaml', inputs.working-directory)) }}
+        restore-keys: ${{ runner.os }}-pnpm-
 
     - name: Install dependencies
       if: ${{ inputs.install == 'true' }}
