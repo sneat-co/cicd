@@ -15,12 +15,16 @@ inputs:
     default: "22"
   pnpm-version:
     description: >-
-      pnpm major version. Ignored automatically when the REPO-ROOT
+      Exact pnpm version. Ignored automatically when the REPO-ROOT
       package.json declares a packageManager field: pnpm/action-setup reads
       its default package_json_file at the workspace root (NOT the working
       directory) and rejects having both that field and a version input.
+      Pinned to an exact version (not the "11" major tag): pnpm 11.12.0's
+      self-installer throws "Cannot use 'in' operator to search for
+      'integrity' in undefined", so resolving the latest 11.x broke every
+      deploy on 2026-07-12. Bump deliberately after verifying a release.
     required: false
-    default: "11"
+    default: "11.9.0"
   install:
     description: Whether to run `pnpm install --frozen-lockfile`
     required: false
