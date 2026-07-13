@@ -53,7 +53,9 @@ on:
       pnpm-version:
         type: string
         required: false
-        default: "11"
+        # Pinned: pnpm 11.12.0's self-installer is broken ("Cannot use 'in' operator
+        # to search for 'integrity' in undefined") and fails every publish. 11.9.0 is known-good.
+        default: "11.9.0"
       timeout-minutes:
         type: number
         required: false
