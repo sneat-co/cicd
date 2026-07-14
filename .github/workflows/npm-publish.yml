@@ -60,7 +60,7 @@ on:
         default: 20
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -103,8 +103,14 @@ jobs:
         if: ${{ inputs.build-command != '' }}
         run: ${{ inputs.build-command }}
 
+      - name: Configure git identity for release commits
+        run: |
+          git config --global user.email "ci@sneat.co"
+          git config --global user.name "Sneat CI"
+
       - name: Publish packages
         run: ${{ inputs.publish-command }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
