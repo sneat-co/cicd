@@ -11,13 +11,6 @@ name: Go CI (reusable)
 
 on:
   workflow_call:
-    secrets:
-      GH_TOKEN:
-        description: >-
-          GitHub token used to authenticate private module fetches via git URL
-          rewrite. Required when any direct or transitive dependency lives in a
-          private GitHub repository. Leave unset for fully-public module graphs.
-        required: false
     inputs:
       working-directory:
         description: Directory containing go.mod
@@ -40,22 +33,6 @@ on:
         type: number
         required: false
         default: 15
-      goprivate:
-        description: >-
-          Value for the GOPRIVATE environment variable, e.g.
-          'github.com/sneat-co'. Required when fetching private modules.
-          Must be paired with the GH_TOKEN secret.
-        type: string
-        required: false
-        default: ""
-      goprivate-git-host:
-        description: >-
-          Host (or host/org prefix) to rewrite for private module authentication,
-          e.g. 'github.com/sneat-co'. Defaults to 'github.com' when goprivate
-          is set and this input is omitted.
-        type: string
-        required: false
-        default: ""
 
 jobs:
   go:
@@ -75,13 +52,6 @@ jobs:
           go-version-file: ${{ inputs.go-version-file != '' && inputs.go-version-file || format('{0}/go.mod', inputs.working-directory) }}
           cache-dependency-path: ${{ inputs.working-directory }}/go.sum
 
-      - name: Authenticate private Go modules
-        if: ${{ inputs.goprivate != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GOPRIVATE_GIT_HOST: ${{ inputs.goprivate-git-host != '' && inputs.goprivate-git-host || 'github.com' }}
-        run: git config --global url."https://${GH_TOKEN}:x-oauth-basic@${GOPRIVATE_GIT_HOST}/".insteadOf "https://${GOPRIVATE_GIT_HOST}/"
-
       - name: Lint — gofmt
         if: ${{ inputs.gofmt != 'off' }}
         env:
@@ -97,16 +67,10 @@ jobs:
           fi
 
       - name: Lint — go vet
-        env:
-          GOPRIVATE: ${{ inputs.goprivate }}
         run: go vet ./...
 
       - name: Test
-        env:
-          GOPRIVATE: ${{ inputs.goprivate }}
         run: go test ./...
 
       - name: Build
-        env:
-          GOPRIVATE: ${{ inputs.goprivate }}
         run: go build ./...
