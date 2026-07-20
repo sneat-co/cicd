@@ -1,0 +1,20 @@
+name: Check LCOV coverage
+description: Fails when aggregate LCOV line coverage is below an explicit minimum.
+
+inputs:
+  coverage-path:
+    description: Path to lcov.info or a directory containing one or more lcov.info files
+    required: true
+  minimum-percent:
+    description: Minimum aggregate line coverage percentage
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check line coverage threshold
+      shell: bash
+      env:
+        COVERAGE_PATH: ${{ inputs.coverage-path }}
+        COVERAGE_MINIMUM_PERCENT: ${{ inputs.minimum-percent }}
+      run: ${{ github.action_path }}/check.sh
