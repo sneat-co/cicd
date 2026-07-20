@@ -1,0 +1,113 @@
+name: Firebase artifact deploy (reusable)
+
+# Deploys only a SHA-bound build artifact produced by a successful CI run. The
+# caller supplies the exact workflow run ID and source SHA; this workflow never
+# installs application dependencies or rebuilds source.
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Name of the immutable build artifact
+        type: string
+        required: true
+      artifact-run-id:
+        description: Workflow run ID that produced the artifact
+        type: string
+        required: true
+      source-sha:
+        description: Full source SHA expected in the artifact manifest
+        type: string
+        required: true
+      firebase-project:
+        description: Firebase/GCP project ID
+        type: string
+        required: true
+      firebase-config:
+        description: Firebase config path relative to repository root
+        type: string
+        required: false
+        default: firebase.json
+      workload-identity-provider:
+        description: Google Workload Identity provider resource name
+        type: string
+        required: true
+      service-account:
+        description: Google service account used for deployment
+        type: string
+        required: true
+      firebase-tools-version:
+        description: Exact firebase-tools major/minor selector
+        type: string
+        required: false
+        default: "15"
+      smoke-url:
+        description: Optional URL checked for a successful HTTP response after deployment
+        type: string
+        required: false
+        default: ""
+      timeout-minutes:
+        type: number
+        required: false
+        default: 15
+
+jobs:
+  deploy:
+    name: verify artifact · deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout the validated source revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source-sha }}
+
+      - name: Restore the validated build artifact
+        uses: sneat-co/cicd/actions/restore-build-artifact@main
+        with:
+          name: ${{ inputs.artifact-name }}
+          run-id: ${{ inputs.artifact-run-id }}
+          source-sha: ${{ inputs.source-sha }}
+          github-token: ${{ github.token }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
+
+      - name: Deploy the validated artifact to Firebase Hosting
+        env:
+          FIREBASE_CONFIG_PATH: ${{ inputs.firebase-config }}
+          FIREBASE_PROJECT_ID: ${{ inputs.firebase-project }}
+          FIREBASE_TOOLS_VERSION: ${{ inputs.firebase-tools-version }}
+        run: |
+          npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" deploy \
+            --only hosting \
+            --config "$FIREBASE_CONFIG_PATH" \
+            --project "$FIREBASE_PROJECT_ID" \
+            --non-interactive
+
+      - name: Check deployed site availability
+        if: ${{ inputs.smoke-url != '' }}
+        env:
+          SMOKE_URL: ${{ inputs.smoke-url }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-delay 3 --retry-all-errors \
+            --output /dev/null \
+            "$SMOKE_URL"
+
+      - name: Record deployment provenance
+        shell: bash
+        run: |
+          {
+            echo "### Firebase deployment"
+            echo "- Source: \`${{ inputs.source-sha }}\`"
+            echo "- Artifact: \`${{ inputs.artifact-name }}\`"
+            echo "- CI run: \`${{ inputs.artifact-run-id }}\`"
+            echo "- Project: \`${{ inputs.firebase-project }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

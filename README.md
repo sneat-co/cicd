@@ -1,5 +1,27 @@
 # cicd
 
+Shared CI/CD workflows and composite actions for Sneat repositories.
+
+## Build once, deploy the validated artifact
+
+`nx-ci.yml` can package repository-relative build outputs after lint, tests,
+coverage and build complete. The artifact contains a reproducible tar archive,
+the full source SHA, a JSON provenance manifest and a SHA-256 checksum.
+
+`firebase-deploy.yml` downloads that artifact from the exact successful CI run,
+verifies the SHA and checksum, and deploys it without installing application
+dependencies or rebuilding source. Automatic and recovery deployments therefore
+promote the same bytes that CI validated.
+
+Coverage is part of the reusable Nx contract: callers provide a coverage command,
+an LCOV path and an explicit minimum line-coverage percentage. A missing report or
+a result below the threshold fails CI.
+
+`playwright-artifact-e2e.yml` restores the same build artifact and can run several
+Playwright suites sequentially after a single dependency/browser setup. Its SPA
+server handles client-side routes, and Playwright configs opt out of their normal
+development web server via `E2E_SKIP_WEBSERVER`, so E2E never rebuilds the app.
+
 Shared **reusable GitHub Actions workflows** and **composite actions** for
 sneat-co repositories (e.g. [`assetus`](https://github.com/sneat-co/assetus),
 [`listus`](https://github.com/sneat-co/listus)). One place to define how we lint,

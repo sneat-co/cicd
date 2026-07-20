@@ -1,0 +1,37 @@
+name: Package immutable build artifact
+description: Packages repository-relative build outputs with a source SHA and checksum.
+
+inputs:
+  name:
+    description: Workflow-run-scoped artifact name
+    required: true
+  paths:
+    description: Newline-separated repository-relative files/directories
+    required: true
+  source-sha:
+    description: Full source commit SHA
+    required: true
+  retention-days:
+    description: Artifact retention in days
+    required: false
+    default: "14"
+
+runs:
+  using: composite
+  steps:
+    - id: package
+      name: Create reproducible archive and manifest
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_PATHS: ${{ inputs.paths }}
+        ARTIFACT_SOURCE_SHA: ${{ inputs.source-sha }}
+      run: ${{ github.action_path }}/package.sh
+
+    - name: Upload immutable build artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ steps.package.outputs.directory }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}

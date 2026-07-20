@@ -1,0 +1,27 @@
+name: Run Playwright suites against build artifact
+description: Serves static SPA outputs and runs multiple Playwright suites without rebuilding applications.
+
+inputs:
+  working-directory:
+    description: pnpm workspace directory
+    required: false
+    default: frontend
+  cases:
+    description: Newline-separated e2e-directory|static-directory pairs
+    required: true
+  project:
+    description: Playwright browser project
+    required: false
+    default: chromium
+
+runs:
+  using: composite
+  steps:
+    - name: Serve artifacts and run Playwright suites
+      shell: bash
+      env:
+        E2E_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        E2E_CASES: ${{ inputs.cases }}
+        E2E_PROJECT: ${{ inputs.project }}
+        E2E_ACTION_PATH: ${{ github.action_path }}
+      run: ${{ github.action_path }}/run.sh

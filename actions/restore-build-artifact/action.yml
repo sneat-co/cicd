@@ -1,0 +1,35 @@
+name: Restore immutable build artifact
+description: Downloads, verifies, and restores a build artifact from a specific workflow run.
+
+inputs:
+  name:
+    description: Artifact name
+    required: true
+  run-id:
+    description: Workflow run ID that produced the artifact
+    required: true
+  source-sha:
+    description: Expected full source commit SHA
+    required: true
+  github-token:
+    description: Token with Actions read permission
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download artifact from validated workflow run
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ runner.temp }}/sneat-build-artifact-download
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.github-token }}
+
+    - name: Verify and restore artifact
+      shell: bash
+      env:
+        ARTIFACT_DIRECTORY: ${{ runner.temp }}/sneat-build-artifact-download
+        ARTIFACT_EXPECTED_NAME: ${{ inputs.name }}
+        ARTIFACT_EXPECTED_SOURCE_SHA: ${{ inputs.source-sha }}
+      run: ${{ github.action_path }}/restore.sh

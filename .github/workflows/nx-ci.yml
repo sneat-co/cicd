@@ -8,7 +8,11 @@ name: Nx CI (reusable)
 #       uses: sneat-co/cicd/.github/workflows/nx-ci.yml@main
 #       with:
 #         working-directory: frontend
-#         targets: "lint test build"
+#         targets: "lint build"
+#         coverage-command: pnpm exec vitest run --coverage --coverage.reporter=lcov
+#         minimum-coverage: 20
+#         artifact-name: frontend-dist
+#         artifact-paths: frontend/dist
 
 on:
   workflow_call:
@@ -35,6 +39,50 @@ on:
         type: number
         required: false
         default: 20
+      coverage-command:
+        description: >-
+          Command that runs tests with coverage from working-directory. Required
+          when minimum-coverage is greater than zero.
+        type: string
+        required: false
+        default: ""
+      coverage-path:
+        description: LCOV file or directory containing lcov.info files, relative to working-directory
+        type: string
+        required: false
+        default: coverage
+      minimum-coverage:
+        description: Minimum aggregate line coverage percentage (0 disables the check)
+        type: number
+        required: false
+        default: 0
+      coverage-artifact-name:
+        description: Optional name used to upload the LCOV report
+        type: string
+        required: false
+        default: ""
+      artifact-name:
+        description: Optional immutable build artifact name
+        type: string
+        required: false
+        default: ""
+      artifact-paths:
+        description: >-
+          Newline-separated repository-relative files/directories to package.
+          Required when artifact-name is set.
+        type: string
+        required: false
+        default: ""
+      artifact-on-main-only:
+        description: Upload the build artifact only for refs/heads/main
+        type: boolean
+        required: false
+        default: true
+      artifact-retention-days:
+        description: Number of days to retain the build artifact
+        type: number
+        required: false
+        default: 14
 
 jobs:
   nx:
@@ -57,3 +105,39 @@ jobs:
       - name: Nx run-many
         working-directory: ${{ inputs.working-directory }}
         run: pnpm exec nx run-many -t ${{ inputs.targets }}
+
+      - name: Require a coverage command when a threshold is configured
+        if: ${{ inputs.minimum-coverage > 0 && inputs.coverage-command == '' }}
+        run: |
+          echo "::error::coverage-command is required when minimum-coverage is greater than zero"
+          exit 1
+
+      - name: Test with coverage
+        if: ${{ inputs.minimum-coverage > 0 }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.coverage-command }}
+
+      - name: Enforce test coverage threshold
+        if: ${{ inputs.minimum-coverage > 0 }}
+        uses: sneat-co/cicd/actions/check-lcov-coverage@main
+        with:
+          coverage-path: ${{ inputs.working-directory }}/${{ inputs.coverage-path }}
+          minimum-percent: ${{ inputs.minimum-coverage }}
+
+      - name: Upload coverage report
+        if: ${{ inputs.minimum-coverage > 0 && inputs.coverage-artifact-name != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.coverage-path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Package immutable build artifact
+        if: ${{ inputs.artifact-name != '' && (!inputs.artifact-on-main-only || github.ref == 'refs/heads/main') }}
+        uses: sneat-co/cicd/actions/package-build-artifact@main
+        with:
+          name: ${{ inputs.artifact-name }}
+          paths: ${{ inputs.artifact-paths }}
+          source-sha: ${{ github.sha }}
+          retention-days: ${{ inputs.artifact-retention-days }}

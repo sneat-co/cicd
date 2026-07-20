@@ -1,0 +1,115 @@
+name: Playwright artifact E2E (reusable)
+
+# Runs one or more Playwright suites sequentially in one job against the exact
+# static build artifact produced by CI. Dependency/browser setup is paid once,
+# and no application is rebuilt by a Playwright webServer.
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the pnpm/Nx workspace
+        type: string
+        required: false
+        default: frontend
+      cases:
+        description: >-
+          Newline-separated e2e-directory|static-directory pairs, relative to
+          working-directory.
+        type: string
+        required: true
+      artifact-name:
+        description: Build artifact name
+        type: string
+        required: true
+      artifact-run-id:
+        description: Workflow run ID that produced the artifact
+        type: string
+        required: true
+      source-sha:
+        description: Full source SHA expected in the artifact
+        type: string
+        required: true
+      project:
+        description: Playwright browser project
+        type: string
+        required: false
+        default: chromium
+      node-version:
+        type: string
+        required: false
+        default: "22"
+      pnpm-version:
+        type: string
+        required: false
+        default: "11.12.0"
+      timeout-minutes:
+        type: number
+        required: false
+        default: 25
+
+jobs:
+  e2e:
+    name: e2e from artifact (${{ inputs.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout validated source revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source-sha }}
+
+      - name: Restore validated frontend artifact
+        uses: sneat-co/cicd/actions/restore-build-artifact@main
+        with:
+          name: ${{ inputs.artifact-name }}
+          run-id: ${{ inputs.artifact-run-id }}
+          source-sha: ${{ inputs.source-sha }}
+          github-token: ${{ github.token }}
+
+      - name: Setup pnpm + Node once
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Get Playwright version
+        id: pw
+        working-directory: ${{ inputs.working-directory }}
+        run: echo "version=$(pnpm exec playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-${{ inputs.project }}
+
+      - name: Install Playwright browser and system dependencies
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm exec playwright install ${{ inputs.project }} --with-deps
+
+      - name: Install Playwright system dependencies
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm exec playwright install-deps ${{ inputs.project }}
+
+      - name: Run all suites against validated static outputs
+        uses: sneat-co/cicd/actions/playwright-artifact-e2e@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          cases: ${{ inputs.cases }}
+          project: ${{ inputs.project }}
+
+      - name: Upload Playwright reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-artifact-reports
+          path: ${{ inputs.working-directory }}/dist/.playwright
+          if-no-files-found: ignore
+          retention-days: 14
