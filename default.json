@@ -4,7 +4,7 @@
   "internalChecksFilter": "strict",
   "timezone": "Europe/Dublin",
   "schedule": [
-    "at 4:00am every day"
+    "0 4 * * *"
   ],
   "packageRules": [
     {
