@@ -101,6 +101,10 @@ on:
         # Optional / legacy: prefer the `cloudflare-account-id` input fed from a
         # VARIABLE. Kept for back-compat with callers that still pass it here.
         required: false
+      PRIMEUI_LICENSE:
+        # Optional build-time licence used by PrimeUI applications. Callers
+        # without PrimeUI remain unchanged.
+        required: false
 
 jobs:
   deploy:
@@ -130,6 +134,8 @@ jobs:
 
       - name: Build
         working-directory: ${{ inputs.working-directory }}
+        env:
+          PRIMEUI_LICENSE: ${{ secrets.PRIMEUI_LICENSE }}
         run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
