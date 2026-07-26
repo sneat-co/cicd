@@ -4,9 +4,25 @@
   "internalChecksFilter": "strict",
   "timezone": "Europe/Dublin",
   "schedule": [
-    "0 4 * * *"
+    "* 0-3 * * 1"
   ],
   "packageRules": [
+    {
+      "description": "Batch GitHub Actions updates",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions",
+      "groupSlug": "github-actions"
+    },
+    {
+      "description": "Batch JavaScript dependencies managed through npm, pnpm, or Yarn",
+      "matchManagers": [
+        "npm"
+      ],
+      "groupName": "JavaScript dependencies",
+      "groupSlug": "javascript-dependencies"
+    },
     {
       "description": "Batch dependencies published from the Sneat-Co GitHub organization",
       "matchSourceUrls": [
