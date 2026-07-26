@@ -124,6 +124,31 @@ Consumers pin `@main` for always-latest, or a tag/SHA for stability
 (e.g. `@v1`). Prefer a moving `v1` tag for breaking-change isolation once this
 stabilises.
 
+## Shared Renovate policy
+
+`default.json` is the shared Renovate preset for Sneat repositories. It runs
+early on Monday mornings in the `Europe/Dublin` timezone and groups:
+
+- GitHub Actions updates;
+- JavaScript dependency updates detected by Renovate's `npm` manager, including
+  pnpm workspaces and lockfiles;
+- dependencies published from the `sneat-co` GitHub organization.
+
+Consumer repositories enable it with:
+
+```json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "github>sneat-co/cicd"
+  ]
+}
+```
+
+Add ecosystem-specific presets before `github>sneat-co/cicd` when needed. Go
+repositories currently also extend `github>sneat-co/sneat-renovate-go`.
+
 ## Prerequisite for private consumers
 
 Because sneat-co repos are private, this repo must **allow Actions access from
