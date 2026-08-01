@@ -139,7 +139,7 @@ jobs:
         run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ inputs.cloudflare-account-id != '' && inputs.cloudflare-account-id || secrets.CLOUDFLARE_ACCOUNT_ID }}
