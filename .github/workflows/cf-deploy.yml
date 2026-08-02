@@ -20,6 +20,11 @@ name: Cloudflare Deploy (reusable)
 #
 # Optional: `smoke-command` runs after a successful deploy (post-deploy smoke).
 #
+# Optional: `setup-tinygo: true` installs TinyGo before the build, for callers
+# whose build compiles Go to WebAssembly with it (e.g. chess's chesswasm).
+# Off by default — installing a toolchain most callers never touch would slow
+# every deploy for one repo's benefit.
+#
 # Call from a consumer repo (auth: org-level CLOUDFLARE_API_TOKEN secret +
 # CLOUDFLARE_ACCOUNT_ID org variable — the account id is an identifier, not a
 # secret):
@@ -82,6 +87,22 @@ on:
         type: string
         required: false
         default: ""
+      setup-tinygo:
+        description: >-
+          Install TinyGo before the build, for callers whose build compiles Go
+          to WebAssembly with it. Off by default so most callers pay nothing
+          for a toolchain they never use.
+        type: boolean
+        required: false
+        default: false
+      tinygo-version:
+        description: >-
+          TinyGo version to install when setup-tinygo is true. Pinned, not
+          latest, so a TinyGo release can't silently change every caller's
+          wasm output.
+        type: string
+        required: false
+        default: "0.41.1"
       node-version:
         type: string
         required: false
@@ -131,6 +152,19 @@ jobs:
           working-directory: ${{ inputs.extra-install-directory }}
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
+
+      # Installed from the official .deb rather than a marketplace action on
+      # purpose: a new `uses:` has to clear the org action allowlist, and
+      # lesson L53 records that a non-allowlisted action fails at startup with
+      # no diagnosis. Gated on setup-tinygo so callers that don't build wasm
+      # never pay for it.
+      - name: Install TinyGo
+        if: ${{ inputs.setup-tinygo }}
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/tinygo.deb" \
+            "https://github.com/tinygo-org/tinygo/releases/download/v${{ inputs.tinygo-version }}/tinygo_${{ inputs.tinygo-version }}_amd64.deb"
+          sudo dpkg -i "${RUNNER_TEMP}/tinygo.deb"
+          tinygo version
 
       - name: Build
         working-directory: ${{ inputs.working-directory }}
