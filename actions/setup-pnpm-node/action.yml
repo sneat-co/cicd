@@ -19,7 +19,7 @@ inputs:
       package.json declares a pnpm packageManager version.
       Pinned to an exact version (not the "11" major tag) for reproducibility.
     required: false
-    default: "11.12.0"
+    default: "11.20.0"
   install:
     description: Whether to run `pnpm install --frozen-lockfile`
     required: false
