@@ -1,0 +1,156 @@
+name: Renovate lockfile fix (reusable)
+
+# Reusable workflow: repairs a pnpm lockfile on a Renovate branch when
+# Renovate's own lockfile artifact updater fails to regenerate it (e.g. its
+# sandboxed Node process OOMs) — see sneat-co/sneat-apps#3464, where a
+# `@sneat/*` override bump in pnpm-workspace.yaml left pnpm-lock.yaml stale
+# and both CI jobs failed with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH under the
+# frozen `pnpm ci` install. A normal GitHub-hosted runner (16 GB) regenerates
+# the same lockfile in ~8s / ~1.9 GB peak RSS, well below where Renovate's
+# own sandbox OOMs, so this recovers deterministically. Renovate is the
+# hosted Mend app (not self-hosted), so we can't set NODE_OPTIONS there —
+# this workflow is the recovery path instead.
+#
+# For each directory in `lockfile-dirs`, this probes with a frozen,
+# lockfile-only install first. Only when that probe fails does it regenerate
+# the lockfile — never unconditionally, to avoid spurious lockfile churn on
+# branches that are already consistent. Only lockfiles that actually changed
+# are committed and pushed back to the branch that triggered the run.
+#
+# Call from a consumer repo (needs a PAT with Contents read+write — pushes
+# made with the default GITHUB_TOKEN do not trigger downstream workflow
+# runs, so the repair commit would never re-run the checks it exists to
+# unblock):
+#
+#   on:
+#     push:
+#       branches: ['renovate/**']
+#
+#   jobs:
+#     fix-lockfile:
+#       if: github.actor == 'renovate[bot]'
+#       uses: sneat-co/cicd/.github/workflows/renovate-lockfile-fix.yml@main
+#       with:
+#         lockfile-dirs: '. landings'
+#       secrets:
+#         git_token: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        required: false
+        default: '24'
+      pnpm-version:
+        type: string
+        required: false
+        default: '11.20.0'
+      lockfile-dirs:
+        description: >-
+          Space-separated list of directories, each containing its own
+          pnpm-lock.yaml, to check and repair.
+        type: string
+        required: false
+        default: '.'
+    secrets:
+      git_token:
+        description: >-
+          PAT with Contents read+write, used both for checkout and for
+          pushing the repair commit back to the branch. Must NOT be the
+          default GITHUB_TOKEN — see the note above.
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fix-lockfile:
+    name: Repair pnpm lockfile(s)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          token: ${{ secrets.git_token }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install pnpm
+        # Deliberately not pnpm/action-setup — its self-installer path is
+        # broken for some pnpm releases.
+        run: npm install --global "pnpm@${{ inputs.pnpm-version }}"
+
+      - name: Check and repair lockfiles
+        id: repair
+        env:
+          # Passed via env rather than interpolated straight into the script:
+          # a `${{ }}` expansion inside `run:` is substituted before bash sees
+          # the line, so it is a script-injection surface. Callers are trusted
+          # today, but this is a reusable workflow — keep the boundary.
+          LOCKFILE_DIRS: ${{ inputs.lockfile-dirs }}
+        run: |
+          set -euo pipefail
+
+          changed_lockfiles=()
+
+          # Unquoted on purpose: this is the intended word split on spaces.
+          for dir in $LOCKFILE_DIRS; do
+            lockfile="$dir/pnpm-lock.yaml"
+            echo "::group::$lockfile"
+
+            if (cd "$dir" && pnpm install --frozen-lockfile --lockfile-only); then
+              echo "OK: $lockfile is already consistent — nothing to do"
+            else
+              echo "MISMATCH: $lockfile is stale — regenerating"
+              (cd "$dir" && pnpm install --lockfile-only)
+
+              if git diff --quiet -- "$lockfile"; then
+                echo "UNCHANGED: $lockfile was regenerated but produced no diff"
+              else
+                # Prove the repair before we push it: a regenerated lockfile
+                # that still fails the frozen install would burn a full CI
+                # cycle on the PR and leave a misleading "fix" commit behind.
+                echo "REPAIRED: $lockfile changed — re-checking frozen install"
+                (cd "$dir" && pnpm install --frozen-lockfile --lockfile-only)
+                changed_lockfiles+=("$lockfile")
+              fi
+            fi
+
+            echo "::endgroup::"
+          done
+
+          if [ "${#changed_lockfiles[@]}" -eq 0 ]; then
+            echo "No lockfiles changed; nothing to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${changed_lockfiles[@]}" > /tmp/changed-lockfiles.txt
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push repaired lockfile(s)
+        if: steps.repair.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t changed_lockfiles < /tmp/changed-lockfiles.txt
+
+          git config user.name "sneat-ci"
+          git config user.email "alex@trakhimenok.com"
+          git add -- "${changed_lockfiles[@]}"
+          git commit -m "chore(deps): regenerate pnpm lockfile after failed Renovate artifact update"
+          git push origin "HEAD:$BRANCH"
+
+          echo "Pushed repaired lockfile(s) to $BRANCH: ${changed_lockfiles[*]}"
