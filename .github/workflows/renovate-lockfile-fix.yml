@@ -92,12 +92,19 @@ jobs:
 
       - name: Check and repair lockfiles
         id: repair
+        env:
+          # Passed via env rather than interpolated straight into the script:
+          # a `${{ }}` expansion inside `run:` is substituted before bash sees
+          # the line, so it is a script-injection surface. Callers are trusted
+          # today, but this is a reusable workflow — keep the boundary.
+          LOCKFILE_DIRS: ${{ inputs.lockfile-dirs }}
         run: |
           set -euo pipefail
 
           changed_lockfiles=()
 
-          for dir in ${{ inputs.lockfile-dirs }}; do
+          # Unquoted on purpose: this is the intended word split on spaces.
+          for dir in $LOCKFILE_DIRS; do
             lockfile="$dir/pnpm-lock.yaml"
             echo "::group::$lockfile"
 
@@ -110,7 +117,11 @@ jobs:
               if git diff --quiet -- "$lockfile"; then
                 echo "UNCHANGED: $lockfile was regenerated but produced no diff"
               else
-                echo "REPAIRED: $lockfile was regenerated and changed"
+                # Prove the repair before we push it: a regenerated lockfile
+                # that still fails the frozen install would burn a full CI
+                # cycle on the PR and leave a misleading "fix" commit behind.
+                echo "REPAIRED: $lockfile changed — re-checking frozen install"
+                (cd "$dir" && pnpm install --frozen-lockfile --lockfile-only)
                 changed_lockfiles+=("$lockfile")
               fi
             fi
@@ -129,6 +140,8 @@ jobs:
 
       - name: Commit and push repaired lockfile(s)
         if: steps.repair.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -138,6 +151,6 @@ jobs:
           git config user.email "alex@trakhimenok.com"
           git add -- "${changed_lockfiles[@]}"
           git commit -m "chore(deps): regenerate pnpm lockfile after failed Renovate artifact update"
-          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "HEAD:$BRANCH"
 
-          echo "Pushed repaired lockfile(s) to ${{ github.ref_name }}: ${changed_lockfiles[*]}"
+          echo "Pushed repaired lockfile(s) to $BRANCH: ${changed_lockfiles[*]}"
