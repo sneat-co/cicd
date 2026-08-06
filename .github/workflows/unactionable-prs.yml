@@ -1,0 +1,127 @@
+name: Unactionable PRs sweep
+
+# Reports pull requests that NOBODY IS ABLE TO ACT ON, across the whole org.
+#
+# Three distinct populations, each found the hard way and each recorded in
+# backstage/LESSONS-LEARNED.md:
+#
+#   L87 — archived-repo residue. Archiving freezes a repo and abandons its open
+#         PRs: they cannot be merged (read-only) and closing them needs an
+#         unarchive first. 27 such PRs were found across 7 repos, two dating to
+#         2024, only because someone swept the org by hand.
+#   L78 — abandoned bot PRs. When a dependency bot's own tooling fails, its PR
+#         stops being a change in flight and becomes an orphan: automerge never
+#         fires, nothing alerts, and the PR sits red indefinitely.
+#   L76 — repos whose default branch is red. A failing default branch surfaces
+#         only when someone opens a PR against it, which for a low-traffic repo
+#         can be weeks.
+#
+# The question this answers is deliberately NOT "which PRs are old?" — age alone
+# is normal and generates noise nobody reads. It is "which PRs is nobody able to
+# act on?", which is a much smaller and strictly actionable set.
+#
+# Reporting only. It never closes, merges or modifies anything: deciding what a
+# stuck PR deserves needs a human, and a sweep that acted on its own findings
+# would be a good way to discard something like sneat-go-server#106 ("restore Go
+# source files accidentally removed"), which looked exactly like bot noise.
+
+on:
+  schedule:
+    # Mondays 08:00 UTC — a weekly digest, not a stream.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      stale-days:
+        description: Days without an update before an open bot PR counts as abandoned
+        type: string
+        required: false
+        default: "14"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    name: Report PRs nobody can act on
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Sweep the org
+        env:
+          # Needs a token that can see private repos across the org; the default
+          # GITHUB_TOKEN is scoped to this repository only.
+          GH_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+          ORG: sneat-co
+          STALE_DAYS: ${{ inputs.stale-days || '14' }}
+        run: |
+          set -euo pipefail
+
+          cutoff=$(date -u -d "${STALE_DAYS} days ago" +%Y-%m-%d)
+          {
+            echo "## Unactionable PRs in \`${ORG}\`"
+            echo ""
+            echo "Bot PRs count as abandoned after **${STALE_DAYS} days** without an update (before ${cutoff})."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          gh repo list "$ORG" --limit 500 --json name,isArchived > repos.json
+          total_archived=0 total_stale=0 total_red=0
+
+          # --- L87: archived repos still holding open PRs -------------------
+          { echo "### Archived repos with open PRs"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+          found=0
+          for repo in $(jq -r '.[] | select(.isArchived) | .name' repos.json); do
+            prs=$(gh pr list -R "$ORG/$repo" --state open --limit 100 \
+                    --json number,title,author,createdAt 2>/dev/null || echo '[]')
+            n=$(jq 'length' <<<"$prs")
+            [ "$n" -eq 0 ] && continue
+            found=1; total_archived=$((total_archived + n))
+            echo "- **$repo** — $n open, repo is read-only so none can be merged" >> "$GITHUB_STEP_SUMMARY"
+            jq -r --arg r "$repo" '.[] | "  - \($r)#\(.number) `\(.createdAt[0:10])` [\(.author.login)] \(.title)"' <<<"$prs" >> "$GITHUB_STEP_SUMMARY"
+          done
+          [ "$found" -eq 0 ] && echo "_None._" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- L78: abandoned bot PRs on live repos -------------------------
+          { echo "### Bot PRs with no activity for ${STALE_DAYS}+ days"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+          gh search prs --owner "$ORG" --state open --limit 500 \
+            --json number,title,repository,author,updatedAt > open.json
+          stale=$(jq --arg c "$cutoff" '[.[] | select(.author.type == "Bot") | select(.updatedAt[0:10] < $c)]' open.json)
+          total_stale=$(jq 'length' <<<"$stale")
+          if [ "$total_stale" -eq 0 ]; then
+            echo "_None._" >> "$GITHUB_STEP_SUMMARY"
+          else
+            jq -r 'sort_by(.updatedAt) | .[] | "- \(.repository.name)#\(.number) `\(.updatedAt[0:10])` \(.title)"' <<<"$stale" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- L76: red default branches ------------------------------------
+          # Only repos that have open PRs are checked: a red default branch
+          # matters most where somebody is actively trying to land something,
+          # and this keeps the sweep to a sane number of API calls.
+          { echo "### Repos whose default branch is red"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+          found=0
+          for repo in $(jq -r '[.[].repository.name] | unique | .[]' open.json); do
+            # Ask for the repo's actual default branch rather than assuming
+            # "main" — assuming it silently reports every repo on master (or any
+            # other name) as healthy, which is the failure mode this is for.
+            branch=$(gh repo view "$ORG/$repo" --json defaultBranchRef \
+                       --jq '.defaultBranchRef.name' 2>/dev/null || echo "")
+            [ -z "$branch" ] && continue
+            concl=$(gh run list -R "$ORG/$repo" --branch "$branch" --limit 1 \
+                      --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "")
+            if [ "$concl" = "failure" ]; then
+              found=1; total_red=$((total_red + 1))
+              echo "- **$repo** — latest \`$branch\` run failed; PRs opened against it inherit that" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          [ "$found" -eq 0 ] && echo "_None._" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "---"
+            echo "**${total_archived}** archived-repo PRs · **${total_stale}** abandoned bot PRs · **${total_red}** red default branches"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Exit 0 regardless. This is a digest a human reads, not a gate: a red
+          # cross on a scheduled job trains people to ignore scheduled jobs.
