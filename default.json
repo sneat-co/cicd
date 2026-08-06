@@ -8,6 +8,13 @@
   ],
   "packageRules": [
     {
+      "description": "Hold TypeScript at 6.x. TypeScript 7.0 is the Go-native compiler and shipped without a stable programmatic API, so typescript-eslint, ts-api-utils and @swc-node/register cannot run on it - Nx fails to build its project graph, which takes lint, test and build down together. Angular's compiler-cli independently requires typescript >=6.0 <6.1, so no TypeScript version satisfies both Angular 22 and a v7 bump. 6.x is deliberately still allowed: it is the actual upgrade path to Angular 22. Revisit when typescript-eslint and @swc-node/register ship v7 support and Angular's compiler-cli accepts it.",
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
       "description": "Batch GitHub Actions updates",
       "matchManagers": [
         "github-actions"
