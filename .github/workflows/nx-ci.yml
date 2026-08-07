@@ -83,6 +83,16 @@ on:
         type: number
         required: false
         default: 14
+      peer-range-strict:
+        description: >-
+          Fail the job when a package we publish (@sneat/* or @sneat-team/*)
+          declares a bare ^0.0.x/~0.0.x peerDependencies range. Defaults to
+          false (report-only) while the fleet clears its existing bare
+          ranges; flip to true once this repo's @sneat/* peerDependencies use
+          a union, an interval, or an exact pin instead.
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   nx:
@@ -94,6 +104,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Reject bare ^0.0.x peer ranges on packages we publish
+        uses: sneat-co/cicd/actions/check-peer-ranges@main
+        continue-on-error: ${{ !inputs.peer-range-strict }}
+        with:
+          directory: .
 
       - name: Setup pnpm + Node
         uses: sneat-co/cicd/actions/setup-pnpm-node@main

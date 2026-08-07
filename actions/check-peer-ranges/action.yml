@@ -1,0 +1,22 @@
+name: Check peer dependency ranges
+description: >-
+  Fails when a package we publish (@sneat/* or @sneat-team/*) declares a
+  bare ^0.0.x or ~0.0.x range in peerDependencies. That shape resolves to
+  exactly one patch under semver, so the next 0.0.x publish can silently
+  install a second physical copy of the package -- breaking Angular DI
+  identity checks (NG0201) invisibly to TypeScript.
+
+inputs:
+  directory:
+    description: Repository directory to scan recursively for package.json files
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Scan peerDependencies for bare ^0.0.x ranges
+      shell: bash
+      env:
+        PEER_RANGE_SCAN_DIR: ${{ inputs.directory }}
+      run: node "${{ github.action_path }}/check.mjs" "$PEER_RANGE_SCAN_DIR"
