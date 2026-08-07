@@ -25,6 +25,14 @@ name: Cloudflare Deploy (reusable)
 # Off by default — installing a toolchain most callers never touch would slow
 # every deploy for one repo's benefit.
 #
+# Optional: `goprivate` + the `GOPRIVATE_TOKEN` secret authenticate a build
+# that needs to `go get`/`go list` a private GitHub repo (e.g. chess's wasm
+# build reaching a private module). Both are optional and independent of
+# setup-tinygo; when either is omitted, no credential rewrite happens and
+# GOPRIVATE is left empty — byte-identical to today's behaviour. `goprivate`
+# is expected in Go's own `github.com/<org>` form; only its first
+# comma-separated entry is used to derive the credential-rewrite prefix.
+#
 # Call from a consumer repo (auth: org-level CLOUDFLARE_API_TOKEN secret +
 # CLOUDFLARE_ACCOUNT_ID org variable — the account id is an identifier, not a
 # secret):
@@ -37,6 +45,18 @@ name: Cloudflare Deploy (reusable)
 #         cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 #       secrets:
 #         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#
+#   # ...plus, only for a build that reaches a private GitHub Go module:
+#   jobs:
+#     deploy:
+#       uses: sneat-co/cicd/.github/workflows/cf-deploy.yml@main
+#       with:
+#         setup-tinygo: true
+#         goprivate: github.com/sneat-co
+#         cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+#       secrets:
+#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         GOPRIVATE_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
 
 on:
   workflow_call:
@@ -103,6 +123,18 @@ on:
         type: string
         required: false
         default: "0.41.1"
+      goprivate:
+        description: >-
+          GOPRIVATE value for a build that needs to reach a private Go
+          module (e.g. a private GitHub repo). Empty by default so existing
+          callers are unaffected. Only takes effect together with the
+          GOPRIVATE_TOKEN secret — supplying just one of the two is a no-op.
+          Expected in Go's `github.com/<org>` form; when it contains a
+          comma-separated list, only the first entry is used to derive the
+          git credential-rewrite prefix.
+        type: string
+        required: false
+        default: ""
       node-version:
         type: string
         required: false
@@ -125,6 +157,12 @@ on:
       PRIMEUI_LICENSE:
         # Optional build-time licence used by PrimeUI applications. Callers
         # without PrimeUI remain unchanged.
+        required: false
+      GOPRIVATE_TOKEN:
+        # Optional GitHub token (repo scope) for a build that needs
+        # `git`/`go` to authenticate against a private GitHub repo behind
+        # the `goprivate` input. Callers without private Go modules remain
+        # unchanged.
         required: false
 
 jobs:
@@ -166,10 +204,43 @@ jobs:
           sudo dpkg -i "${RUNNER_TEMP}/tinygo.deb"
           tinygo version
 
+      # Gated on goprivate alone: the `secrets` context isn't allowed in a
+      # step `if:` (only env/github/inputs/job/matrix/needs/runner/steps/
+      # strategy/vars are — actionlint catches the alternative), so the
+      # token-presence check happens at runtime below instead. Net effect
+      # is still a no-op unless BOTH are supplied: nothing to rewrite
+      # without a prefix, and a token with no prefix has no matching
+      # `goprivate` to gate on in the first place. Must run before Build,
+      # since `go`/`git` resolve modules during that step.
+      #
+      # H1-adjacent hardening: thread the secret through `env:` rather than
+      # interpolating it directly into the `run:` script text — `${{ }}`
+      # substitution happens before bash ever parses the line, so a value
+      # embedded this way is one `set -x`/process-listing away from leaking,
+      # whereas an env var is masked in logs and only ever read as data.
+      - name: Configure git credentials for private Go modules
+        if: ${{ inputs.goprivate != '' }}
+        env:
+          GOPRIVATE_TOKEN: ${{ secrets.GOPRIVATE_TOKEN }}
+          GOPRIVATE_PREFIX: ${{ inputs.goprivate }}
+        run: |
+          if [ -z "$GOPRIVATE_TOKEN" ]; then
+            echo "goprivate is set but the GOPRIVATE_TOKEN secret is empty — skipping the git credential rewrite (nothing to authenticate with)."
+            exit 0
+          fi
+          # GOPRIVATE can be a comma-separated list of glob patterns; the
+          # credential rewrite only supports one prefix, so take the first
+          # entry and drop a trailing "/*" glob suffix — git's insteadOf
+          # does a literal prefix match, not a glob match.
+          prefix="${GOPRIVATE_PREFIX%%,*}"
+          prefix="${prefix%/\*}"
+          git config --global url."https://${GOPRIVATE_TOKEN}:x-oauth-basic@${prefix}".insteadOf "https://${prefix}"
+
       - name: Build
         working-directory: ${{ inputs.working-directory }}
         env:
           PRIMEUI_LICENSE: ${{ secrets.PRIMEUI_LICENSE }}
+          GOPRIVATE: ${{ inputs.goprivate }}
         run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
