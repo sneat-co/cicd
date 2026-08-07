@@ -47,7 +47,7 @@ node "$repo_root/actions/playwright-artifact-e2e/spa-server.mjs" \
   "$fixture/workspace/dist/app" 43821 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true; rm -rf "$fixture"' EXIT
-for _ in {1..20}; do
+for _ in {1..100}; do
   if curl --fail --silent http://127.0.0.1:43821/route > "$fixture/served"; then
     break
   fi

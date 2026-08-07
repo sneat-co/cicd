@@ -24,3 +24,6 @@ jobs:
 
       - name: Run action tests
         run: tests/test-build-artifact-actions.sh
+
+      - name: Run peer-range check tests
+        run: tests/test-check-peer-ranges.sh

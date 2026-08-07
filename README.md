@@ -22,6 +22,29 @@ Playwright suites sequentially after a single dependency/browser setup. Its SPA
 server handles client-side routes, and Playwright configs opt out of their normal
 development web server via `E2E_SKIP_WEBSERVER`, so E2E never rebuilds the app.
 
+## Peer dependency ranges on packages we publish
+
+`nx-ci.yml` scans every `package.json` in the checked-out repo for a bare
+`^0.0.x` (or `~0.0.x`) range in `peerDependencies` on a `@sneat/*` or
+`@sneat-team/*` package. Under semver, a caret on a `0.0.x` version permits
+nothing but that exact patch, so the moment the dependency publishes its next
+`0.0.x` patch, pnpm installs two physical copies side by side. Two copies
+means two distinct `InjectionToken` objects, and Angular DI matches providers
+by object identity — the app resolves one token, the library asks for the
+other, and specs fail with `NG0201: No provider found for InjectionToken ...`
+while TypeScript stays green throughout, because both copies are structurally
+identical. Widen the range instead: an explicit union
+(`^0.0.5 || ^0.0.6`), an interval (`>=0.0.5 <0.1.0`), or an exact pin all
+resolve to a single installed copy.
+
+The check runs via the `check-peer-ranges` composite action and is
+report-only by default (`continue-on-error`, driven by the `peer-range-strict`
+input) while the fleet clears its existing bare ranges; pass
+`peer-range-strict: true` once a repo's own `@sneat/*` peerDependencies are
+clean to make it a hard gate. Run it standalone with
+`node actions/check-peer-ranges/check.mjs [directory]` (defaults to the
+current directory) — this is also how `wb` and local runs invoke it.
+
 Shared **reusable GitHub Actions workflows** and **composite actions** for
 sneat-co repositories (e.g. [`assetus`](https://github.com/sneat-co/assetus),
 [`listus`](https://github.com/sneat-co/listus)). One place to define how we lint,
@@ -35,7 +58,7 @@ a few lines long and upgrades happen once.
 | Workflow | Purpose | Key inputs |
 |----------|---------|-----------|
 | `go-ci.yml` | Lint (`gofmt` + `go vet`), `go test`, `go build` a Go module | `working-directory` (default `backend`); `gofmt` = `error` (default, fail on unformatted) / `warn` (annotate only) / `off` |
-| `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version` |
+| `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version`, `peer-range-strict` (default `false`; gates bare `^0.0.x` peer ranges on `@sneat/*` packages when `true`) |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
 | `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke), `setup-tinygo` (default `false`, installs TinyGo before the build for callers compiling Go to wasm), `tinygo-version` (default `0.41.1`); secret `CLOUDFLARE_API_TOKEN` |
 
@@ -44,6 +67,7 @@ a few lines long and upgrades happen once.
 | Action | Purpose |
 |--------|---------|
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. Used by `nx-ci.yml` and `playwright-e2e.yml`. |
+| `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
 
 ## Deploy auth (org-level, one place)
 
