@@ -13,6 +13,14 @@ name: Nx CI (reusable)
 #         minimum-coverage: 20
 #         artifact-name: frontend-dist
 #         artifact-paths: frontend/dist
+#
+# `extra-install-directory` installs a SECOND workspace before `nx run-many`.
+# Needed when a project in the Nx graph is its own pnpm workspace (its own
+# package.json + lockfile) nested inside the repo: the root install does not
+# reach it, so a target that shells out to that workspace's binaries fails with
+# a bare `<tool>: not found` and no hint that deps are the cause.
+#
+#         extra-install-directory: landings
 
 on:
   workflow_call:
@@ -22,6 +30,15 @@ on:
         type: string
         required: false
         default: frontend
+      extra-install-directory:
+        description: >-
+          Optional second directory to install deps in before running the
+          targets — for a nested pnpm workspace that the root install does not
+          reach (e.g. an Astro `landings/` beside an Nx app). Mirrors the input
+          of the same name on cf-deploy.yml.
+        type: string
+        required: false
+        default: ""
       targets:
         description: Space-separated Nx targets passed to `nx run-many -t`
         type: string
@@ -115,6 +132,14 @@ jobs:
         uses: sneat-co/cicd/actions/setup-pnpm-node@main
         with:
           working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm + Node (extra workspace)
+        if: ${{ inputs.extra-install-directory != '' }}
+        uses: sneat-co/cicd/actions/setup-pnpm-node@main
+        with:
+          working-directory: ${{ inputs.extra-install-directory }}
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
 
