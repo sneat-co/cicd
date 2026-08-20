@@ -50,7 +50,13 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: ${{ inputs.go-version-file != '' && inputs.go-version-file || format('{0}/go.mod', inputs.working-directory) }}
-          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+          # go.sum is absent for a dependency-free module, and setup-go fails
+          # when no listed path resolves. go.mod always exists, so listing both
+          # keeps the cache key precise where go.sum exists and still resolves
+          # where it does not.
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/go.sum
+            ${{ inputs.working-directory }}/go.mod
 
       - name: Lint — gofmt
         if: ${{ inputs.gofmt != 'off' }}

@@ -27,3 +27,9 @@ jobs:
 
       - name: Run peer-range check tests
         run: tests/test-check-peer-ranges.sh
+
+  go:
+    name: Go CI
+    uses: ./.github/workflows/go-ci.yml
+    with:
+      working-directory: .
