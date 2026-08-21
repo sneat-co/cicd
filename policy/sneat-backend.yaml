@@ -1,0 +1,99 @@
+# Sneat backend dependency and layering policy.
+#
+# Consumed by `wb deps policy` (github.com/sneat-dev/wb). One document governs
+# every Sneat Go backend; a repository declares only which policy applies to it
+# and, where its module path cannot say, what kind of repository it is.
+#
+# Editing this file changes the rules for every repository at once, because a
+# repository names this policy's SOURCE and never a release of it. Before
+# tagging a change, measure the blast radius:
+#
+#     wb deps policy validate policy/sneat-backend.yaml
+#     wb deps policy test     policy/sneat-backend.yaml
+#     wb deps policy impact   policy/sneat-backend.yaml --match 'sneat-co/*'
+#
+# There is no exception mechanism. A repository either satisfies the rules or
+# cannot gate on them; making a forbidden dependency legal means changing this
+# document in a reviewed pull request.
+
+# Groups are matched in order and the first match wins, so a narrow pattern must
+# sit above a broad one. The "expect:" block at the bottom pins that ordering:
+# reorder two patterns and those assertions fail.
+
+groups:
+  - {name: own-repo,                 match: ["<self>/..."]}
+  - {name: extension-contract,       match: ["github.com/sneat-co/ext-*/..."]}
+  - {name: host,                     match: ["github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}/..."]}
+  - {name: shared-kernel,            match: ["github.com/sneat-co/{sneat-go-core,sneat-core-modules}/..."]}
+  - {name: extension-implementation, match: ["github.com/sneat-co/*/...", "github.com/sneat-games/*/..."]}
+  - {name: bot-framework,            match: ["github.com/bots-go-framework/..."]}
+  - {name: dalgo-adapter,            match: ["github.com/dal-go/dalgo{2,4}*/..."]}
+  - {name: dalgo-core,               match: ["github.com/dal-go/..."]}
+  - {name: strongo,                  match: ["github.com/strongo/..."]}
+  - {name: third-party,              match: ["..."]}
+
+types:
+  - name: extension-contract
+    detect: ["github.com/sneat-co/ext-*/backend"]
+    scopes:
+      source: {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, strongo, third-party]}
+      tests:  {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, dalgo-adapter, strongo, third-party]}
+
+  - name: shared-library
+    detect: ["github.com/sneat-co/{sneat-go-core,sneat-core-modules}", "github.com/sneat-co/{sneat-go-core,sneat-core-modules}/..."]
+    scopes:
+      source: {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, strongo, third-party]}
+      tests:  {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, dalgo-adapter, strongo, third-party]}
+
+  - name: host
+    detect: ["github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}", "github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}/..."]
+    scopes:
+      source: {allow: [own-repo, extension-contract, extension-implementation, shared-kernel, host, bot-framework, dalgo-core, dalgo-adapter, strongo, third-party]}
+
+  - name: extension-implementation
+    detect: ["github.com/sneat-co/*/backend", "github.com/sneat-games/*/backend"]
+    scopes:
+      source: {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, strongo, third-party]}
+      tests:  {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, dalgo-adapter, strongo, third-party]}
+      # A composition root wires concrete drivers; that is what it is for.
+      main:   {allow: [own-repo, extension-contract, shared-kernel, dalgo-core, dalgo-adapter, bot-framework, strongo, third-party]}
+
+layers:
+  # Report only. The measured fleet has 22 edges that break this order; the
+  # mode flips to enforce centrally once that burn-down reaches zero.
+  mode: report
+  unknown-role: ignore
+  roles:
+    cmd:     ["cmd"]
+    ext:     ["*ext"]
+    api:     ["api4*"]
+    botsvc:  ["botservice4*", "convoservice4*", "convo4*", "botapp", "botapi"]
+    delayed: ["delays4*", "delayed4*"]
+    facade:  ["facade4*"]
+    dal:     ["dal4*"]
+    dto:     ["dto4*"]
+    ports:   ["ports4*"]
+    dbo:     ["dbo4*"]
+    models:  ["models4*"]
+    const:   ["const4*"]
+  order:
+    - [cmd, ext]
+    - [api, botsvc, delayed]
+    - [facade]
+    - [dal]
+    - [dto, ports]
+    - [dbo, models]
+    - [const]
+
+expect:
+  - {import: "github.com/sneat-co/ext-calendarius/backend/facade4calendarius", group: extension-contract}
+  - {import: "github.com/sneat-co/calendarius/backend/dbo4calendarius",        group: extension-implementation}
+  - {import: "github.com/sneat-co/sneat-go-core/apicore",                      group: shared-kernel}
+  - {import: "github.com/sneat-co/sneat-go/pkg/modules",                       group: host}
+  - {import: "github.com/dal-go/dalgo/dal",                                    group: dalgo-core}
+  - {import: "github.com/dal-go/dalgo2firestore",                              group: dalgo-adapter}
+  - {import: "github.com/bots-go-framework/bots-fw/botsfw",                    group: bot-framework}
+  - {import: "gopkg.in/yaml.v3",                                               group: third-party}
+  - {module: "github.com/sneat-co/calendarius/backend",                        type: extension-implementation}
+  - {module: "github.com/sneat-co/ext-calendarius/backend",                    type: extension-contract}
+  - {module: "github.com/sneat-co/sneat-go-core",                              type: shared-library}
