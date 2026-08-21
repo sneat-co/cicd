@@ -37,7 +37,10 @@ jobs:
           cache: false
 
       - name: Install wb
-        run: go install github.com/sneat-dev/wb/cmd/wb@latest
+        # Pinned, not "latest": "latest" resolves to whatever release the
+        # module proxy has indexed, and the first run of this workflow passed
+        # on a wb that predated the command it invokes.
+        run: go install github.com/sneat-dev/wb/cmd/wb@v0.37.0
 
       - name: Require a wb that actually has deps policy
         # `go install ...@latest` resolves to the latest RELEASE, which lags

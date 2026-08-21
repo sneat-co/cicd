@@ -42,10 +42,14 @@ on:
         required: false
         default: main
       wb-version:
-        description: Version of the wb CLI to install
+        description: >-
+          Version of the wb CLI to install. Pinned rather than "latest" on
+          purpose: "latest" resolves to whatever release the module proxy has
+          indexed, which cannot express the ordering between a wb feature and
+          the release publishing it. Renovate bumps this.
         type: string
         required: false
-        default: latest
+        default: v0.37.0
       strict:
         description: >-
           Treat report-mode findings as failures for this repository. Only ever
