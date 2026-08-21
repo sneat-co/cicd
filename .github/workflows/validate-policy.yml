@@ -1,0 +1,58 @@
+name: Validate dependency policy
+
+# The policy in this repository governs every Sneat Go backend, and consuming
+# repositories cannot pin a release of it. A change here therefore reaches all
+# of them at once, so it has to be checked before it is merged rather than
+# discovered by nine repositories going red.
+#
+# `validate` catches mistakes in the document itself — chiefly a group or
+# detect pattern an earlier declaration already claims in full, which silently
+# changes every verdict downstream and errors nowhere. `test` runs the
+# assertions the policy declares about its own classification.
+#
+# `wb deps policy impact --match 'sneat-co/*'` measures the blast radius across
+# real repositories, but needs local checkouts of the fleet, so it stays a
+# pre-merge step run by the author rather than a CI job. The pull request
+# template asks for its output.
+
+on:
+  push:
+    branches: [main]
+    paths: ["policy/**"]
+  pull_request:
+    paths: ["policy/**", ".github/workflows/validate-policy.yml"]
+  workflow_dispatch:
+
+jobs:
+  policy:
+    name: validate · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install wb
+        run: go install github.com/sneat-dev/wb/cmd/wb@latest
+
+      - name: Validate every policy document
+        run: |
+          set -euo pipefail
+          for document in policy/*.yaml; do
+            echo "::group::validate $document"
+            wb deps policy validate "$document"
+            echo "::endgroup::"
+          done
+
+      - name: Run each policy's own assertions
+        run: |
+          set -euo pipefail
+          for document in policy/*.yaml; do
+            echo "::group::test $document"
+            wb deps policy test "$document"
+            echo "::endgroup::"
+          done

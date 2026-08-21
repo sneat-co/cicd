@@ -61,6 +61,7 @@ a few lines long and upgrades happen once.
 | `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version`, `peer-range-strict` (default `false`; gates bare `^0.0.x` peer ranges on `@sneat/*` packages when `true`) |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
 | `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke), `setup-tinygo` (default `false`, installs TinyGo before the build for callers compiling Go to wasm), `tinygo-version` (default `0.41.1`); secret `CLOUDFLARE_API_TOKEN` |
+| `deps-policy.yml` | Gate a Go module against the fleet's dependency and layering policy (`policy/sneat-backend.yaml`). Lexical scan of import blocks and `go.mod` — **no credentials, no module downloads**, so it still reports when the build cannot start | `working-directory` (default `backend`), `policy` (override the document), `policy-ref` (ref of this repo the default policy is read from, default `main`), `wb-version` (default `latest`), `strict` (default `false`; only ever tightens) |
 
 ### Composite action (`actions/`)
 
@@ -68,6 +69,54 @@ a few lines long and upgrades happen once.
 |--------|---------|
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. Used by `nx-ci.yml` and `playwright-e2e.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
+
+## Dependency policy (`policy/`)
+
+`policy/sneat-backend.yaml` states which kinds of repository may depend on
+which kinds of dependency, and which direction imports may travel between
+packages inside a repository. It replaces the hand-written `git grep`
+architecture guards that calendarius, competios, togethered and gametable each
+carried separately, with four differently-encoded allowlists between them.
+
+It is applied by [`wb deps policy`](https://github.com/sneat-dev/wb), either
+through `deps-policy.yml` above or locally:
+
+```sh
+wb deps policy check ./backend --policy sneat-co/cicd//policy/sneat-backend.yaml
+wb deps policy explain github.com/dal-go/dalgo2firestore ./backend
+```
+
+A consuming repository declares two lines and may tighten but never loosen:
+
+```yaml
+# backend/.wb-deps-policy.yaml
+policy: sneat-co/cicd//policy/sneat-backend.yaml
+type: extension-implementation      # optional — detected from the module path
+```
+
+It names the policy **source** and never a release. That is deliberate: a
+repository frozen on an old policy would be carrying an exception nobody wrote
+down. The release is resolved by the caller — `policy-ref` in the workflow
+above — so a tightened rule reaches every repository at once.
+
+**Changing this file changes the rules everywhere.** `validate-policy.yml`
+runs `wb deps policy validate` and `wb deps policy test` on every pull request
+touching `policy/`. Those catch mistakes in the document — chiefly a pattern an
+earlier declaration already claims in full, which silently changes every verdict
+downstream and errors nowhere. They do not measure who the change would break,
+so run that yourself before merging and paste the output into the pull request:
+
+```sh
+wb deps policy impact policy/sneat-backend.yaml --match 'sneat-co/*'
+```
+
+Layer rules currently ship in `report` mode. Their mode lives in this document,
+not in any repository, so no repository can demote a rule that binds everyone
+else — and promoting them to `enforce` is one commit here once the burn-down
+(`wb deps policy report --match 'sneat-co/*'`) reaches zero.
+
+There is no exception mechanism: no baseline, no per-repository allowlist, no
+severity dial. A repository either satisfies the rules or cannot gate on them.
 
 ## Deploy auth (org-level, one place)
 

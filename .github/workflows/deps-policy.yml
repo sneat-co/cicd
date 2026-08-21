@@ -1,0 +1,103 @@
+name: Dependency policy (reusable)
+
+# Reusable workflow: gate a Go module against the fleet's dependency and
+# layering policy.
+#
+# Call from a consumer repo:
+#
+#   jobs:
+#     architecture:
+#       uses: sneat-co/cicd/.github/workflows/deps-policy.yml@main
+#       with:
+#         working-directory: backend
+#
+# The scan is lexical — Go import blocks and go.mod, never a resolved module
+# graph — so this job needs NO credentials and downloads none of the module
+# graph, even for private sneat-co dependencies. That is deliberate: it means
+# the boundary is still checked when the build itself cannot start, which is
+# when a boundary is most likely to be under discussion. Keep this job
+# independent of the build job for the same reason.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the go.mod to check
+        type: string
+        required: false
+        default: backend
+      policy:
+        description: >-
+          Policy document to apply. Defaults to this repository's
+          sneat-backend.yaml at the ref named by policy-ref.
+        type: string
+        required: false
+        default: ""
+      policy-ref:
+        description: >-
+          Ref of sneat-co/cicd the default policy is read from. A repository
+          cannot pin a policy release in its own config; the caller resolves it
+          here, so a tightened rule reaches every repository at once.
+        type: string
+        required: false
+        default: main
+      wb-version:
+        description: Version of the wb CLI to install
+        type: string
+        required: false
+        default: latest
+      strict:
+        description: >-
+          Treat report-mode findings as failures for this repository. Only ever
+          tightens; a repository can never use this to be held to less.
+        type: boolean
+        required: false
+        default: false
+      timeout-minutes:
+        type: number
+        required: false
+        default: 10
+
+jobs:
+  policy:
+    name: dependency policy
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ format('{0}/go.mod', inputs.working-directory) }}
+          cache: false
+
+      - name: Install wb
+        env:
+          WB_VERSION: ${{ inputs.wb-version }}
+        run: go install github.com/sneat-dev/wb/cmd/wb@"$WB_VERSION"
+
+      - name: Resolve policy
+        id: policy
+        env:
+          POLICY: ${{ inputs.policy }}
+          POLICY_REF: ${{ inputs.policy-ref }}
+        run: |
+          if [ -n "$POLICY" ]; then
+            echo "reference=$POLICY" >> "$GITHUB_OUTPUT"
+          else
+            echo "reference=https://raw.githubusercontent.com/sneat-co/cicd/${POLICY_REF}/policy/sneat-backend.yaml" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          POLICY: ${{ steps.policy.outputs.reference }}
+          STRICT: ${{ inputs.strict }}
+        run: |
+          args=(deps policy check . --policy "$POLICY" --format github)
+          if [ "$STRICT" = "true" ]; then
+            args+=(--strict)
+          fi
+          wb "${args[@]}"
