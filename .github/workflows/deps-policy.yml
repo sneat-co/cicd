@@ -78,6 +78,21 @@ jobs:
           WB_VERSION: ${{ inputs.wb-version }}
         run: go install github.com/sneat-dev/wb/cmd/wb@"$WB_VERSION"
 
+      - name: Require a wb that actually has deps policy
+        # `go install ...@latest` resolves to the latest RELEASE, which lags
+        # main. A wb without this command does not fail loudly: released
+        # versions print `wb deps` help and exit 0 for an unknown subcommand,
+        # so every step below would pass having checked nothing. Assert the
+        # command is present by reading the command list rather than by
+        # trusting an exit code.
+        run: |
+          if ! wb deps --help 2>&1 | grep -qw policy; then
+            echo "::error title=wb too old::the installed wb has no 'deps policy' command."
+            echo "Pin wb-version to a release containing it, or install from a branch."
+            wb deps --help || true
+            exit 1
+          fi
+
       - name: Resolve policy
         id: policy
         env:
