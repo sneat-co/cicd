@@ -62,7 +62,20 @@ jobs:
 
       - name: Get Playwright version
         id: pw
-        run: echo "version=$(pnpm exec playwright --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" >> "$GITHUB_OUTPUT"
+        run: |
+          # `pnpm exec` can print its own banner first (e.g. "Done in 144ms
+          # using pnpm v11.20.0"), which also matches a bare semver grep and
+          # was previously picked up instead of Playwright's own version —
+          # silently pinning the browser cache key to the pnpm version
+          # forever, so a real Playwright bump never invalidated a stale
+          # cached browser build. Anchor on the "Version X.Y.Z" line
+          # Playwright itself prints instead.
+          PW_VERSION="$(pnpm exec playwright --version | awk '/^Version /{print $2; exit}')"
+          if [ -z "$PW_VERSION" ]; then
+            echo "::error::Could not determine Playwright version from 'pnpm exec playwright --version' output" >&2
+            exit 1
+          fi
+          echo "version=$PW_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
         id: pw-cache
