@@ -110,6 +110,20 @@ on:
         type: boolean
         required: false
         default: false
+      check-zonejs:
+        description: >-
+          Fail the job when the pnpm dependency graph resolves zone.js.
+          zone.js was eliminated fleet-wide on 2026-08-25 (backstage lesson
+          L2026-08-25-2038): @angular/build picks its zone-based vs zoneless
+          TEST strategy by probing whether zone.js is RESOLVABLE (including
+          pnpm's .pnpm hoist mirror via NODE_PATH), not by reading config, so
+          a single phantom optional-peer resolution of zone.js (an optional
+          peer of @angular/core, @ionic/angular, @analogjs/vitest-angular)
+          silently flips a zoneless suite back to zone-based and breaks it.
+          Set to false only as a deliberate, reviewed opt-out.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   nx:
@@ -142,6 +156,28 @@ jobs:
           working-directory: ${{ inputs.extra-install-directory }}
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Zone.js regression guard
+        if: ${{ inputs.check-zonejs }}
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        run: |
+          # `pnpm why` always exits 0 whether or not the package resolves —
+          # do not gate on exit code. Parse the --json array length instead:
+          # empty ([]) means zone.js is not resolvable anywhere in the pnpm
+          # graph, including the .pnpm hoist mirror; a non-empty array means
+          # it is, which is exactly what makes @angular/build's zone-vs-
+          # zoneless TEST-strategy probe pick zone-based and break a zoneless
+          # suite. Confirmed empirically against a zone-free fleet repo
+          # (empty array, exit 0) and a synthetic fixture depending on
+          # zone.js (one-element array, exit 0).
+          found="$(pnpm why -r zone.js --json | jq -r 'length')"
+          if [[ "$found" -gt 0 ]]; then
+            echo "::error::zone.js is resolvable in this pnpm dependency graph ($found match(es)). zone.js was eliminated fleet-wide on 2026-08-25 (backstage lesson L2026-08-25-2038). @angular/build picks its zone-based vs zoneless TEST strategy by probing whether zone.js is RESOLVABLE (including pnpm's .pnpm hoist mirror via NODE_PATH), not by reading config, so this breaks vitest's zoneless suites with an unresolvable 'await import(\"zone.js/testing\")' even when nothing in this repo depends on zone.js directly — zone.js is an optional peer of @angular/core, @ionic/angular, and @analogjs/vitest-angular, and pnpm's auto-install-peers installs unmet peers even when peerDependenciesMeta marks them optional (pnpm/pnpm#11155). Fix: add \`overrides: {\"zone.js\": \"-\"}\` to pnpm-workspace.yaml, PLUS the .pnpmfile.cjs readPackage hook that strips the zone.js peerDependencies/peerDependenciesMeta entries before pnpm's peer-resolution phase ever sees them (the override alone is not sufficient against pnpm/pnpm#11155). See backstage LESSONS-LEARNED.md L2026-08-25-2038. Set check-zonejs: false on this workflow only as a deliberate, reviewed opt-out."
+            pnpm why -r zone.js
+            exit 1
+          fi
+          echo "zone.js guard: clean — zone.js is not resolvable anywhere in the pnpm dependency graph."
 
       - name: Nx run-many
         working-directory: ${{ inputs.working-directory }}
