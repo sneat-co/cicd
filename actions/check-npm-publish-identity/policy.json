@@ -1,0 +1,53 @@
+{
+  "policy_version": 1,
+  "template_exception": {
+    "repository": "sneat-co/sneat-ext-contract-template",
+    "package": "@sneat/extension-template-contract"
+  },
+  "repository_package_prefixes": {
+    "sneat-co/debtus": [
+      "@sneat/extension-splitus"
+    ]
+  },
+  "repository_packages": {
+    "sneat-co/ext-kids-club": [
+      "@sneat/extension-kidsclub-contract"
+    ],
+    "sneat-co/ext-rsvp-express": [
+      "@sneat/extension-rsvpexpress-contract"
+    ],
+    "sneat-co/ext-sneat-team": [
+      "@sneat/extension-team-contract"
+    ],
+    "sneat-co/sneat-libs": [
+      "@sneat/api",
+      "@sneat/api-firebase-auth",
+      "@sneat/api-public",
+      "@sneat/app",
+      "@sneat/app-auth",
+      "@sneat/app-ionic",
+      "@sneat/app-public",
+      "@sneat/auth-core",
+      "@sneat/auth-models",
+      "@sneat/auth-ui",
+      "@sneat/components",
+      "@sneat/core",
+      "@sneat/core-public",
+      "@sneat/data",
+      "@sneat/datagrid",
+      "@sneat/dto",
+      "@sneat/extension-calendarius-contract",
+      "@sneat/extension-calendarius-internal",
+      "@sneat/extension-calendarius-shared",
+      "@sneat/grid",
+      "@sneat/logging",
+      "@sneat/space-components",
+      "@sneat/space-models",
+      "@sneat/space-nav-ionic",
+      "@sneat/space-nav-router",
+      "@sneat/space-services",
+      "@sneat/ui",
+      "@sneat/wizard"
+    ]
+  }
+}

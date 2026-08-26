@@ -1,0 +1,38 @@
+name: Check npm publisher identity
+description: >-
+  Refuses a publish before dependencies or credentials are exposed when a
+  publishable package is not owned by the checked-out Sneat Co. repository.
+
+inputs:
+  directory:
+    description: Repository-relative directory containing the package workspace.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Verify package and repository identity
+      shell: bash
+      env:
+        PUBLISH_DIRECTORY: ${{ inputs.directory }}
+        PUBLISH_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        publish_directory="$(node "$GITHUB_ACTION_PATH/resolve-publish-directory.mjs" \
+          --workspace "$GITHUB_WORKSPACE" \
+          --directory "$PUBLISH_DIRECTORY")"
+        node "$GITHUB_ACTION_PATH/check.mjs" \
+          --repository "$PUBLISH_REPOSITORY" \
+          --directory "$publish_directory"
+
+    - name: Refuse a caller-local armed publisher duplicate
+      shell: bash
+      env:
+        PUBLISH_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        node "$GITHUB_ACTION_PATH/audit.mjs" \
+          --repository "$PUBLISH_REPOSITORY" \
+          --repository-root "$GITHUB_WORKSPACE" \
+          --require-no-direct-publisher

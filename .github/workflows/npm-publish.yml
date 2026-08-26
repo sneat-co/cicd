@@ -76,6 +76,20 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
 
+      # This runs before dependency installation and before NPM_TOKEN or
+      # NODE_AUTH_TOKEN is present in any step environment. The provider owns
+      # the repository-to-package policy, so callers retain their current
+      # contract and cannot turn a copied scaffold into a publisher by passing
+      # a different arbitrary publish command.
+      - name: Verify package publisher identity
+        # `$/` resolves in this reusable workflow's provider repository at its
+        # running commit, rather than in the caller checkout. This keeps the
+        # new preflight inside the already-approved reusable-workflow surface
+        # and prevents workflow/action ref drift.
+        uses: $/actions/check-npm-publish-identity
+        with:
+          directory: ${{ inputs.working-directory }}
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:

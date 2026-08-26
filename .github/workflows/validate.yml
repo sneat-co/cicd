@@ -31,6 +31,9 @@ jobs:
       - name: Run go-module-tags tests
         run: tests/test-go-module-tags.sh
 
+      - name: Run NPM publisher identity tests
+        run: tests/test-npm-publish-identity.sh
+
   go:
     name: Go CI
     uses: ./.github/workflows/go-ci.yml

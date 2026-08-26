@@ -45,6 +45,71 @@ clean to make it a hard gate. Run it standalone with
 `node actions/check-peer-ranges/check.mjs [directory]` (defaults to the
 current directory) — this is also how `wb` and local runs invoke it.
 
+## NPM publisher package identity
+
+`npm-publish.yml` now verifies package identity immediately after checkout,
+before dependency installation, builds, or exposure of `NPM_TOKEN` and
+`NODE_AUTH_TOKEN`. Existing callers need no new input: the provider derives
+ordinary ownership from the established repository/package conventions and
+emits one deterministic JSON receipt (`npm-publish-identity:`) naming the
+repository, policy version, and package manifests it accepted.
+The reusable workflow refers to the action with GitHub's provider-self `$/`
+reference, so it runs at the exact reusable-workflow commit without adding a
+second caller-facing action allowlist or ref to migrate.
+
+An `ext-<id>` repository may publish only
+`@sneat/extension-<id>-contract`; an implementation repository may publish its
+own `@sneat/extension-<id>` package family. A package whose `repository` field
+is present must also name the checked-out repository. The narrowly declared
+provider policy keeps the historical `sneat-co/debtus` ownership of the
+`@sneat/extension-splitus` family explicit rather than treating it as a generic
+exception. The policy also carries the exact legacy spelling mappings for
+`ext-kids-club`, `ext-rsvp-express`, and `ext-sneat-team`, plus the reviewed
+explicit public package set in `sneat-co/sneat-libs`; unknown public packages
+and unscoped public packages fail before publishing. A publish workspace must
+also contain at least one approved source-visible public package identity. The
+publish command is therefore required to publish only those source manifests:
+generated post-build package identities are deliberately unsupported rather
+than being allowed to reach the token without a provider ownership check.
+
+`@sneat/extension-template-contract` is a separate, non-bypass exception. It
+is accepted only from `sneat-co/sneat-ext-contract-template`; any other caller
+is refused for the placeholder package, a retained template package name,
+template project/path, or a retained `@sneat/*template*` dependency. A manual
+template scaffold is unarmed for the organization audit, but dispatching its
+publisher still runs this preflight and cannot publish until it is rebranded.
+
+The same action performs a caller-local scan for an automatic direct publisher
+that duplicates a shared-provider caller. A local organization scan over
+canonical clones (not hidden or linked worktrees) is diagnostic only:
+
+```sh
+node actions/check-npm-publish-identity/audit.mjs \
+  --organization-root /absolute/path/to/sneat-co
+```
+
+The audit records repository, checked-out Git ref, workflow path and trigger
+class, package manifest path, and package name. It exits non-zero for duplicate
+automatic owners; `workflow_dispatch`-only and missing-trigger workflows are
+reported as unarmed rather than being mistaken for a release publisher. Identity
+findings are always present in the receipt; add `--require-publish-identities`
+to refuse even unarmed source content during an explicit rebrand audit. See
+the [NPM publisher package identity Feature](spec/features/npm-publish-package-identity/README.md)
+for the current audit findings and required cross-repository migration decisions.
+
+The provider-owned, manual-only
+[`audit-npm-publish-identities.yml`](.github/workflows/audit-npm-publish-identities.yml)
+is the authoritative path. It requires the existing
+`SNEAT_ORGANIZATION_AUDIT_TOKEN` with read visibility into every public and
+private Sneat Co. repository (a repository-scoped `github.token` is refused as
+incomplete), enumerates the non-archived owner set through the GitHub API,
+fetches and checks out each recorded immutable default SHA, then fetches a fresh
+GitHub API inventory while auditing. Its run log is the receipt: it names the
+owner set, archive policy, filters, fetched time, default refs/SHAs and exact
+workflow/package evidence; it uploads no artifact and prints no credential.
+`--require-authoritative` consequently requires `--github-api` and that token;
+it will not accept a local `--inventory` JSON file as an authority claim.
+
 Shared **reusable GitHub Actions workflows** and **composite actions** for
 sneat-co repositories (e.g. [`assetus`](https://github.com/sneat-co/assetus),
 [`listus`](https://github.com/sneat-co/listus)). One place to define how we lint,
@@ -195,9 +260,9 @@ jobs:
 
 ## Versioning
 
-Consumers pin `@main` for always-latest, or a tag/SHA for stability
-(e.g. `@v1`). Prefer a moving `v1` tag for breaking-change isolation once this
-stabilises.
+Consumers pin `sneat-co/cicd@main` for always-latest, or a tag/SHA for
+stability (e.g. `sneat-co/cicd@v1`). Prefer a moving `sneat-co/cicd@v1` tag for
+breaking-change isolation once this stabilises.
 
 ## Shared Renovate policy
 
