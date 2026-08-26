@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   actions:
-    name: Artifact, coverage and SPA action tests
+    name: Artifact, coverage, SPA and Go-tag action tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -27,6 +27,9 @@ jobs:
 
       - name: Run peer-range check tests
         run: tests/test-check-peer-ranges.sh
+
+      - name: Run go-module-tags tests
+        run: tests/test-go-module-tags.sh
 
   go:
     name: Go CI

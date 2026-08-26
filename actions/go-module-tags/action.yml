@@ -1,0 +1,31 @@
+name: Tag Go modules
+description: >-
+  Creates and pushes idempotent, validated annotated Git tags for one or more
+  Go modules living in subdirectories of this repository, in the
+  `<module-dir>/v<version>` shape Go uses to version a module that is not at
+  the repository root (see https://go.dev/ref/mod#vcs-version). Never moves
+  an existing tag onto a different commit. The caller supplies every
+  {dir, version} pair explicitly -- this action never guesses versions or
+  scans the tree for changes.
+
+inputs:
+  modules:
+    description: >-
+      JSON array of {"dir": "<module-dir>", "version": "<semver, no v
+      prefix>"} objects to tag.
+    required: true
+  ref:
+    description: >-
+      Git ref (commit-ish) to tag. Defaults to HEAD of the current checkout.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Validate, create and push per-module Go tags
+      shell: bash
+      env:
+        GO_MODULE_TAGS_MODULES: ${{ inputs.modules }}
+        GO_MODULE_TAGS_REF: ${{ inputs.ref }}
+      run: "${{ github.action_path }}/tag-modules.sh"
