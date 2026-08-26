@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates GitHub's provider-self `$/` action reference.
+# Keep this scoped to the one documented provider-local action rather than
+# suppressing action-reference validation across the repository.
+paths:
+  .github/workflows/npm-publish.yml:
+    ignore:
+      - 'specifying action "\$/actions/check-npm-publish-identity" in invalid format because ref is missing'

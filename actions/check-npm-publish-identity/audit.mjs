@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { inspectPackageIdentity } from './check.mjs';
 import { createInventory, schema as inventorySchema } from './create-organization-inventory.mjs';
-
-const actionDirectory = dirname(fileURLToPath(import.meta.url));
-void actionDirectory;
+import { analyzePublisherWorkflows } from './workflow-analysis.mjs';
+import { safeDetail, safeError } from './redact.mjs';
+import { parseStrictJson } from './strict-json.mjs';
 
 function parseArgs(argv) {
   const result = { flags: new Set() };
@@ -30,120 +29,6 @@ function parseArgs(argv) {
 function isRepositorySlug(value) {
   return typeof value === 'string'
     && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
-}
-
-function withoutYamlComments(source) {
-  return source.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
-}
-
-function workflowDirectories(source, fallbackDirectory) {
-  const directories = new Set();
-  for (const match of source.matchAll(/^[ \t]*working-directory:[ \t]*['"]?([^#\n'"]+)/gmi)) {
-    const directory = match[1].trim();
-    if (directory !== '' && !directory.includes('${{')) directories.add(directory);
-  }
-  return directories.size > 0 ? [...directories].sort() : [fallbackDirectory];
-}
-
-function indentation(line) {
-  return (line.match(/^[ \t]*/) || [''])[0].length;
-}
-
-function sharedProviderCalls(source) {
-  const lines = source.split('\n');
-  const calls = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!/^[ \t]*uses:[ \t]*['"]?sneat-co\/cicd\/\.github\/workflows\/npm-publish\.yml@/i.test(line)) continue;
-    const usesIndentation = indentation(line);
-    const callLines = [line];
-    for (let next = index + 1; next < lines.length; next += 1) {
-      const candidate = lines[next];
-      if (candidate !== '' && indentation(candidate) < usesIndentation) break;
-      callLines.push(candidate);
-    }
-    calls.push({ working_directories: workflowDirectories(callLines.join('\n'), 'frontend') });
-  }
-  return calls;
-}
-
-function topLevelOnBlock(source) {
-  const lines = source.split('\n');
-  const onIndex = lines.findIndex((line) => /^(?:on|['"]on['"]):[ \t]*(?:#.*)?$/.test(line) || /^(?:on|['"]on['"]):[ \t]*\S/.test(line));
-  if (onIndex < 0) return undefined;
-  const block = [lines[onIndex]];
-  for (let i = onIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line !== '' && !/^[ \t]/.test(line)) break;
-    block.push(line);
-  }
-  return block.join('\n');
-}
-
-function triggerPolicy(source) {
-  const onBlock = topLevelOnBlock(source);
-  if (!onBlock) return 'disabled';
-  const hasAutomaticReleaseTrigger = /(?:^(?:on|['"]on['"]):[^\n]*(?:\bpush\b|\brelease\b|\bworkflow_run\b|\bcreate\b)|^[ \t]+(?:push|release|workflow_run|create)[ \t]*:)/mi.test(onBlock);
-  if (hasAutomaticReleaseTrigger) return 'armed';
-  if (/(?:^(?:on|['"]on['"]):[^\n]*\bworkflow_dispatch\b|^[ \t]+workflow_dispatch[ \t]*:)/mi.test(onBlock)) return 'manual-only';
-  return 'not-release-triggered';
-}
-
-function jobBlocks(source) {
-  const lines = source.split('\n');
-  const jobsIndex = lines.findIndex((line) => /^jobs:[ \t]*(?:#.*)?$/.test(line));
-  if (jobsIndex < 0) return [];
-  const jobsIndentation = indentation(lines[jobsIndex]);
-  const firstJob = lines.slice(jobsIndex + 1).find((line) => line !== '' && !/^\s*#/.test(line));
-  if (!firstJob || indentation(firstJob) <= jobsIndentation) return [];
-  const jobIndentation = indentation(firstJob);
-  const isJobHeader = (line) => indentation(line) === jobIndentation && /^[ \t]*[^ \t#][^:]*:[ \t]*(?:#.*)?$/.test(line);
-  const blocks = [];
-  for (let index = jobsIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line !== '' && indentation(line) <= jobsIndentation) break;
-    if (!isJobHeader(line)) continue;
-    const block = [line];
-    for (let next = index + 1; next < lines.length; next += 1) {
-      const candidate = lines[next];
-      if (candidate !== '' && indentation(candidate) <= jobsIndentation) break;
-      if (isJobHeader(candidate)) break;
-      block.push(candidate);
-    }
-    blocks.push(block.join('\n'));
-  }
-  return blocks;
-}
-
-function directPublisherCalls(source) {
-  return jobBlocks(source)
-    .filter((job) => /(?:NPM_TOKEN|NODE_AUTH_TOKEN)\s*:\s*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*}}/i.test(job))
-    .filter((job) => /\b(?:npm|pnpm)\s+publish\b|\bnx(?:\s+|\s+\w+\s+)release\b/i.test(job))
-    .map((job) => ({ working_directories: workflowDirectories(job, '.') }));
-}
-
-function publishWorkflows(repositoryRoot) {
-  const workflowDirectory = join(repositoryRoot, '.github', 'workflows');
-  if (!existsSync(workflowDirectory)) return [];
-  return readdirSync(workflowDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .flatMap((entry) => {
-      const path = join(workflowDirectory, entry.name);
-      const source = withoutYamlComments(readFileSync(path, 'utf8'));
-      const sharedProviderCallsInWorkflow = sharedProviderCalls(source);
-      const directPublisherCallsInWorkflow = directPublisherCalls(source);
-      const relativePath = relative(repositoryRoot, path);
-      const trigger = triggerPolicy(source);
-      const records = [];
-      for (const call of sharedProviderCallsInWorkflow) {
-        records.push({ path: relativePath, kind: 'shared-provider', armed: trigger === 'armed', trigger, working_directories: call.working_directories });
-      }
-      for (const call of directPublisherCallsInWorkflow) {
-        records.push({ path: relativePath, kind: 'direct-armed', armed: trigger === 'armed', trigger, working_directories: call.working_directories });
-      }
-      return records;
-    });
 }
 
 function gitRef(repositoryRoot) {
@@ -203,29 +88,59 @@ function authority(repositoryRoot, inventoryEntry, trustedInventory) {
 
 function packageEvidence(repository, repositoryRoot, workingDirectories) {
   const packageEntries = new Map();
+  const packageClaims = new Map();
   const findings = [];
-  const directories = workingDirectories.length > 0 ? workingDirectories : ['.'];
+  const directories = workingDirectories.length > 0 ? workingDirectories : [];
+  const root = realpathSync(repositoryRoot);
   for (const workingDirectory of directories) {
-    const inspected = inspectPackageIdentity({ repository, directory: join(repositoryRoot, workingDirectory) });
+    let directory;
+    try {
+      directory = resolve(root, workingDirectory);
+      const pathRelative = relative(root, directory);
+      if (pathRelative === '..' || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative) || !existsSync(directory)) {
+        throw new Error('outside or missing');
+      }
+      const resolvedDirectory = realpathSync(directory);
+      const resolvedRelative = relative(root, resolvedDirectory);
+      if (resolvedRelative === '..' || resolvedRelative.startsWith(`..${sep}`) || isAbsolute(resolvedRelative) || lstatSync(directory).isSymbolicLink()) {
+        throw new Error('outside or symlinked');
+      }
+      directory = resolvedDirectory;
+    } catch {
+      findings.push({
+        code: 'PUBLISH_DIRECTORY_OUTSIDE_WORKSPACE',
+        detail: 'publisher working directory is outside the checked-out repository, missing, or symlinked',
+        path: '.',
+      });
+      continue;
+    }
+    const inspected = inspectPackageIdentity({ repository, directory });
     for (const finding of inspected.findings) {
-      findings.push({ ...finding, path: relative(repositoryRoot, join(repositoryRoot, workingDirectory, finding.path)) });
+      findings.push({ ...finding, path: relative(root, join(directory, finding.path)) });
     }
     for (const pkg of inspected.packages) {
-      const path = relative(repositoryRoot, join(repositoryRoot, workingDirectory, pkg.path));
+      const path = relative(root, join(directory, pkg.path));
       packageEntries.set(`${pkg.name}\u0000${path}`, { name: pkg.name, path });
+    }
+    for (const pkg of inspected.package_claims) {
+      const path = relative(root, join(directory, pkg.path));
+      packageClaims.set(`${pkg.name}\u0000${path}`, { name: pkg.name, path });
     }
   }
   return {
     findings: findings.sort((a, b) => a.code.localeCompare(b.code) || a.path.localeCompare(b.path) || a.detail.localeCompare(b.detail)),
+    package_claims: [...packageClaims.values()].sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
     packages: [...packageEntries.values()].sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
   };
 }
 
 function auditRepository(repository, repositoryRoot, inventoryEntry, trustedInventory) {
-  const workflows = publishWorkflows(repositoryRoot);
+  const analysis = analyzePublisherWorkflows(repositoryRoot);
+  const workflows = analysis.records;
   for (const workflow of workflows) {
     const evidence = packageEvidence(repository, repositoryRoot, workflow.working_directories);
     workflow.identity_findings = evidence.findings;
+    workflow.package_claims = evidence.package_claims;
     workflow.packages = evidence.packages;
   }
   const packages = new Map();
@@ -237,6 +152,7 @@ function auditRepository(repository, repositoryRoot, inventoryEntry, trustedInve
     packages: [...packages.values()].sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
     ref: gitRef(repositoryRoot),
     repository,
+    workflow_analysis_findings: analysis.findings,
     workflows,
   };
 }
@@ -246,7 +162,7 @@ function ownerEvidence(report) {
   for (const repository of report.repositories) {
     for (const workflow of repository.workflows) {
       if (!workflow.armed) continue;
-      for (const pkg of workflow.packages) {
+      for (const pkg of workflow.package_claims || workflow.packages) {
         const record = {
           package: pkg.name,
           package_path: pkg.path,
@@ -282,7 +198,7 @@ function directDuplicates(report) {
     if (shared.length === 0 || direct.length === 0) continue;
     for (const workflow of direct) {
       duplicates.push({
-        packages: workflow.packages,
+        packages: workflow.package_claims || workflow.packages,
         ref: repository.ref,
         repository: repository.repository,
         shared_workflows: shared.map((entry) => entry.path),
@@ -316,6 +232,30 @@ function identityFindings(report, armedOnly) {
   return [...unique.values()].sort((a, b) => a.repository.localeCompare(b.repository) || a.workflow.localeCompare(b.workflow) || a.code.localeCompare(b.code) || a.path.localeCompare(b.path));
 }
 
+function workflowAnalysisFindings(report, armedOnly) {
+  const failures = [];
+  for (const repository of report.repositories) {
+    for (const finding of repository.workflow_analysis_findings || []) {
+      if (finding.relevant !== true || (armedOnly && finding.armed === false)) continue;
+      failures.push({
+        ...finding,
+        ref: repository.ref,
+        repository: repository.repository,
+        workflow: finding.path,
+      });
+    }
+  }
+  const unique = new Map();
+  for (const finding of failures) {
+    unique.set([finding.repository, finding.ref, finding.workflow, finding.code, finding.detail].join('\u0000'), finding);
+  }
+  return [...unique.values()].sort((a, b) => (
+    a.repository.localeCompare(b.repository)
+    || a.workflow.localeCompare(b.workflow)
+    || a.code.localeCompare(b.code)
+  ));
+}
+
 function organizationRepositories(root, organization) {
   return readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !entry.isSymbolicLink())
@@ -327,9 +267,9 @@ function organizationRepositories(root, organization) {
 function loadInventory(path, organization, maximumAgeSeconds) {
   let inventory;
   try {
-    inventory = JSON.parse(readFileSync(resolve(path), 'utf8'));
-  } catch (error) {
-    throw new Error(`cannot read --inventory: ${error.message}`);
+    inventory = parseStrictJson(readFileSync(resolve(path), 'utf8'));
+  } catch {
+    throw new Error('cannot read a valid --inventory');
   }
   if (inventory.schema !== inventorySchema || inventory.source !== 'github-api' || inventory.organization !== organization || !Array.isArray(inventory.repositories)) {
     throw new Error('--inventory does not have the required GitHub API inventory schema, source, organization, and repositories');
@@ -343,13 +283,20 @@ function loadInventory(path, organization, maximumAgeSeconds) {
   const repositories = [...inventory.repositories].sort((left, right) => left.repository.localeCompare(right.repository));
   const seen = new Set();
   for (const entry of repositories) {
-    if (entry.archived && inventory.archive_policy === 'exclude') throw new Error(`--inventory includes archived repository despite exclude policy: ${entry.repository}`);
+    if (entry.archived && inventory.archive_policy === 'exclude') throw new Error('--inventory includes an archived repository despite exclude policy');
     if (!isRepositorySlug(entry.repository) || !entry.repository.startsWith(`${organization}/`) || !entry.default_branch || !/^[0-9a-f]{40}$/i.test(entry.default_sha || '') || seen.has(entry.repository)) {
-      throw new Error(`--inventory has invalid repository evidence: ${entry.repository || '(empty)'}`);
+      throw new Error('--inventory has invalid repository evidence');
     }
     seen.add(entry.repository);
   }
   return { ...inventory, repositories };
+}
+
+function redacted(value) {
+  if (typeof value === 'string') return safeDetail(value);
+  if (Array.isArray(value)) return value.map(redacted);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redacted(entry)]));
+  return value;
 }
 
 async function main() {
@@ -357,7 +304,7 @@ async function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`npm-publish-audit: ARGUMENT_ERROR ${error.message}`);
+    console.error(`npm-publish-audit: ARGUMENT_ERROR ${safeError(error)}`);
     process.exit(2);
   }
 
@@ -383,7 +330,7 @@ async function main() {
       inventory = loadInventory(args.inventory, organization, undefined);
     }
   } catch (error) {
-    console.error(`npm-publish-audit: ARGUMENT_ERROR ${error.message}`);
+    console.error(`npm-publish-audit: ARGUMENT_ERROR ${safeError(error)}`);
     process.exit(2);
   }
 
@@ -420,6 +367,7 @@ async function main() {
     repository_source: organizationScan ? 'canonical immediate children only; hidden and symlinked directories excluded' : 'one checked-out caller repository',
     scope: organizationScan ? {
       archive_policy: inventory?.archive_policy || 'local-snapshot: archived remotes are not queried or included unless checked out',
+      credential_entitlement: trustedInventory ? inventory?.credential_entitlement : undefined,
       filters: [...(inventory?.filters || ['local snapshot only']), 'immediate children only', 'hidden directories excluded', 'symlinked directories excluded', 'origin repository must match directory name'],
       inventory_fetched_at: inventory?.fetched_at,
       organization,
@@ -435,6 +383,8 @@ async function main() {
   const directArmedDuplicates = directDuplicates(report);
   const allIdentityFindings = identityFindings(report, false);
   const armedIdentityFindings = identityFindings(report, true);
+  const allWorkflowAnalysisFindings = workflowAnalysisFindings(report, false);
+  const armedWorkflowAnalysisFindings = workflowAnalysisFindings(report, true);
   const nonAuthoritative = report.repositories
     .filter((repository) => repository.authority.state !== 'authoritative')
     .map((repository) => ({ authority: repository.authority, repository: repository.repository }));
@@ -442,51 +392,61 @@ async function main() {
   report.duplicate_package_owners = duplicateOwners;
   report.identity_findings = allIdentityFindings;
   report.armed_identity_findings = armedIdentityFindings;
+  report.workflow_analysis_findings = allWorkflowAnalysisFindings;
+  report.armed_workflow_analysis_findings = armedWorkflowAnalysisFindings;
   report.inventory_findings = inventoryFindings;
   report.non_authoritative_repositories = nonAuthoritative;
-  report.status = duplicateOwners.length === 0 && directArmedDuplicates.length === 0 && armedIdentityFindings.length === 0 && inventoryFindings.length === 0
-    ? (nonAuthoritative.length === 0 ? 'passed' : 'non-authoritative')
-    : 'failed';
-  console.log(`npm-publish-audit: ${JSON.stringify(report)}`);
+  const definitiveFailure = duplicateOwners.length > 0 || directArmedDuplicates.length > 0 || armedIdentityFindings.length > 0 || inventoryFindings.length > 0;
+  report.status = definitiveFailure
+    ? 'failed'
+    : (armedWorkflowAnalysisFindings.length > 0
+      ? 'inconclusive'
+      : (nonAuthoritative.length === 0 ? 'passed' : 'non-authoritative'));
+  console.log(`npm-publish-audit: ${JSON.stringify(redacted(report))}`);
 
   const requireUniqueOwners = args.flags.has('--require-unique-owners');
   const requireNoDirectPublisher = args.flags.has('--require-no-direct-publisher');
   const requirePublishIdentities = args.flags.has('--require-publish-identities');
   for (const duplicate of directArmedDuplicates) {
     if (requireNoDirectPublisher || requireUniqueOwners) {
-      console.error(`npm-publish-audit: [DUPLICATE_ARMED_PUBLISHER] ${duplicate.repository}@${duplicate.ref} ${duplicate.workflow} duplicates ${duplicate.shared_workflows.join(', ')} for ${duplicate.packages.map((pkg) => pkg.name).join(', ') || '(no public package manifest found)'}`);
+      console.error(`npm-publish-audit: [DUPLICATE_ARMED_PUBLISHER] ${safeDetail(duplicate.repository)}@${safeDetail(duplicate.ref)} ${safeDetail(duplicate.workflow)} duplicates ${safeDetail(duplicate.shared_workflows.join(', '))} for ${safeDetail(duplicate.packages.map((pkg) => pkg.name).join(', ') || '(no public package manifest found)')}`);
     }
   }
   for (const duplicate of duplicateOwners) {
     if (requireUniqueOwners) {
       const evidence = duplicate.owners.map((owner) => `${owner.repository}@${owner.ref}:${owner.workflow}:${owner.package_path}`).join(' | ');
-      console.error(`npm-publish-audit: [DUPLICATE_PACKAGE_OWNER] ${duplicate.package}: ${evidence}`);
+      console.error(`npm-publish-audit: [DUPLICATE_PACKAGE_OWNER] ${safeDetail(duplicate.package)}: ${safeDetail(evidence)}`);
     }
   }
   for (const finding of allIdentityFindings) {
     if (requireUniqueOwners ? finding.armed !== false : requirePublishIdentities) {
-      console.error(`npm-publish-audit: [${finding.code}] ${finding.repository}@${finding.ref} ${finding.workflow} ${finding.path}: ${finding.detail}`);
+      console.error(`npm-publish-audit: [${finding.code}] ${safeDetail(finding.repository)}@${safeDetail(finding.ref)} ${safeDetail(finding.workflow)} ${safeDetail(finding.path)}: ${safeDetail(finding.detail)}`);
+    }
+  }
+  for (const finding of allWorkflowAnalysisFindings) {
+    if ((requireUniqueOwners || requireNoDirectPublisher) && finding.armed !== false) {
+      console.error(`npm-publish-audit: [${finding.code}] ${safeDetail(finding.repository)}@${safeDetail(finding.ref)} ${safeDetail(finding.workflow)}: ${safeDetail(finding.detail)}`);
     }
   }
   for (const stale of nonAuthoritative) {
     if (requireAuthoritative) {
-      console.error(`npm-publish-audit: [NON_AUTHORITATIVE_LOCAL_REF] ${stale.repository}: ${stale.authority.reason}`);
+      console.error(`npm-publish-audit: [NON_AUTHORITATIVE_LOCAL_REF] ${safeDetail(stale.repository)}: ${safeDetail(stale.authority.reason)}`);
     }
   }
   for (const finding of inventoryFindings) {
     if (requireAuthoritative) {
-      console.error(`npm-publish-audit: [${finding.code}] ${finding.repository}: ${finding.detail}`);
+      console.error(`npm-publish-audit: [${finding.code}] ${safeDetail(finding.repository)}: ${safeDetail(finding.detail)}`);
     }
   }
-  if ((requireNoDirectPublisher && directArmedDuplicates.length > 0)
-    || (requireUniqueOwners && (duplicateOwners.length > 0 || directArmedDuplicates.length > 0 || armedIdentityFindings.length > 0))
-    || (requirePublishIdentities && allIdentityFindings.length > 0)
-    || (requireAuthoritative && (nonAuthoritative.length > 0 || inventoryFindings.length > 0))) {
+  if ((requireNoDirectPublisher && (directArmedDuplicates.length > 0 || armedWorkflowAnalysisFindings.length > 0))
+    || (requireUniqueOwners && (duplicateOwners.length > 0 || directArmedDuplicates.length > 0 || armedIdentityFindings.length > 0 || armedWorkflowAnalysisFindings.length > 0))
+    || (requirePublishIdentities && (allIdentityFindings.length > 0 || allWorkflowAnalysisFindings.length > 0))
+    || (requireAuthoritative && (nonAuthoritative.length > 0 || inventoryFindings.length > 0 || armedWorkflowAnalysisFindings.length > 0))) {
     process.exit(1);
   }
 }
 
 main().catch((error) => {
-  console.error(`npm-publish-audit: ERROR ${error.message}`);
+  console.error(`npm-publish-audit: ERROR ${safeError(error)}`);
   process.exit(2);
 });

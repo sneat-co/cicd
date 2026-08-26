@@ -143,6 +143,19 @@ mkdir -p "$fixture/outside"
 ln -s "$fixture/outside" "$workspace/outside-link"
 expect_failure 'PUBLISH_DIRECTORY_OUTSIDE_WORKSPACE' \
   node "$directory_resolver" --workspace "$workspace" --directory outside-link
+mkdir -p "$workspace/inside"
+ln -s "$workspace/inside" "$workspace/inside-link"
+expect_failure 'PUBLISH_DIRECTORY_OUTSIDE_WORKSPACE' \
+  node "$directory_resolver" --workspace "$workspace" --directory inside-link
+
+# The strict manifest-only path must not read an identity from a manifest
+# symlink outside the approved package directory.
+symlink_manifest="$fixture/symlink-manifest"
+mkdir -p "$symlink_manifest" "$fixture/symlink-manifest-source"
+write_package "$fixture/symlink-manifest-source/package.json" '@sneat/extension-assetus'
+ln -s "$fixture/symlink-manifest-source/package.json" "$symlink_manifest/package.json"
+expect_failure 'UNSAFE_PACKAGE_MANIFEST_PATH' \
+  node "$checker" --repository sneat-co/assetus --directory "$symlink_manifest" --package @sneat/extension-assetus --manifest-only true
 
 copied_template="$fixture/copied-template"
 write_package "$copied_template/frontend/package.json" '@sneat/ext-contract-template-frontend' true true
@@ -271,6 +284,7 @@ expect_failure 'not a trusted receipt' \
 checkout_inventory="$fixture/checkout-inventory.json"
 checkout_destination="$fixture/checkout-destination"
 fake_bin="$fixture/fake-bin"
+real_git="$(command -v git)"
 mkdir -p "$fake_bin"
 cat > "$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -279,11 +293,25 @@ if [[ "$1" != repo || "$2" != clone ]]; then
   echo "unexpected gh invocation: $*" >&2
   exit 2
 fi
-git clone --no-checkout "$AUTHORITY_ORIGIN" "$4"
+if [[ -z "${GH_TOKEN:-}" || -n "${SNEAT_ORGANIZATION_AUDIT_TOKEN:-}" || -n "${GITHUB_TOKEN:-}" ]]; then
+  echo 'gh must receive only its mapped audit credential' >&2
+  exit 2
+fi
+"$REAL_GIT" clone --no-checkout "$AUTHORITY_ORIGIN" "$4"
+EOF
+cat > "$fake_bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${SNEAT_ORGANIZATION_AUDIT_TOKEN:-}" || -n "${GH_TOKEN:-}" || -n "${GITHUB_TOKEN:-}" ]]; then
+  echo 'git must not receive an audit or GitHub credential' >&2
+  exit 2
+fi
+exec "$REAL_GIT" "$@"
 EOF
 chmod +x "$fake_bin/gh"
+chmod +x "$fake_bin/git"
 printf '{"schema":"npm-publish-organization-inventory/v1","source":"github-api","organization":"sneat-co","archive_policy":"exclude","fetched_at":"%s","filters":["fixture"],"repositories":[{"repository":"sneat-co/assetus","default_branch":"main","default_sha":"%s","archived":false}]}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$authority_initial_sha" > "$checkout_inventory"
-env AUTHORITY_ORIGIN="$authority_origin" PATH="$fake_bin:$PATH" \
+env AUTHORITY_ORIGIN="$authority_origin" REAL_GIT="$real_git" PATH="$fake_bin:$PATH" SNEAT_ORGANIZATION_AUDIT_TOKEN=fixture-audit-token \
   node "$inventory_checkout" --inventory "$checkout_inventory" --directory "$checkout_destination"
 if [[ "$(git -C "$checkout_destination/assetus" rev-parse HEAD)" != "$authority_initial_sha" ]] \
   || git -C "$checkout_destination/assetus" symbolic-ref --quiet HEAD >/dev/null; then
@@ -327,6 +355,7 @@ audit_workflow="$repo_root/.github/workflows/audit-npm-publish-identities.yml"
 if ! rg -Fq 'workflow_dispatch:' "$audit_workflow" \
   || ! rg -Fq 'SNEAT_ORGANIZATION_AUDIT_TOKEN' "$audit_workflow" \
   || ! rg -Fq -- '--github-api' "$audit_workflow" \
+  || rg -q '^[[:space:]]*GH_TOKEN:' "$audit_workflow" \
   || rg -q '^[[:space:]]*schedule:' "$audit_workflow" \
   || rg -qi 'upload-artifact|actions/cache' "$audit_workflow"; then
   echo 'organization audit must stay manual-only, use the explicit organization token, and retain no artifact/cache' >&2

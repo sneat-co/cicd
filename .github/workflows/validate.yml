@@ -34,6 +34,18 @@ jobs:
       - name: Run NPM publisher identity tests
         run: tests/test-npm-publish-identity.sh
 
+      - name: Run NPM publisher structural audit tests
+        run: bash tests/test-npm-publish-audit-structural.sh
+
+      - name: Run NPM publisher JSON safety tests
+        run: node tests/test-npm-publish-json-safety.mjs
+
+      - name: Run NPM publisher redaction tests
+        run: bash tests/test-npm-publish-redaction.sh
+
+      - name: Run NPM publisher authority tests
+        run: bash tests/test-npm-publish-authority.sh
+
   go:
     name: Go CI
     uses: ./.github/workflows/go-ci.yml

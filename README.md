@@ -47,15 +47,22 @@ current directory) — this is also how `wb` and local runs invoke it.
 
 ## NPM publisher package identity
 
-`npm-publish.yml` now verifies package identity immediately after checkout,
-before dependency installation, builds, or exposure of `NPM_TOKEN` and
-`NODE_AUTH_TOKEN`. Existing callers need no new input: the provider derives
-ordinary ownership from the established repository/package conventions and
-emits one deterministic JSON receipt (`npm-publish-identity:`) naming the
-repository, policy version, and package manifests it accepted.
-The reusable workflow refers to the action with GitHub's provider-self `$/`
-reference, so it runs at the exact reusable-workflow commit without adding a
-second caller-facing action allowlist or ref to migrate.
+`npm-publish.yml` is the legacy reusable contract used by 40 current canonical
+Sneat Co. callers. It retains a caller-supplied `publish-command`, so its
+source-manifest preflight is useful diagnostic protection but is not an
+enforced package-publication boundary: the legacy final step still receives
+`NPM_TOKEN` and `NODE_AUTH_TOKEN` while executing caller shell. It remains
+non-enforced migration compatibility until every caller has moved to the
+provider-owned strict contract and the legacy workflow is retired. Do not treat
+a green legacy run as proof that the packed artifact identity was enforced.
+
+The provider action derives ordinary source ownership from established
+repository/package conventions and emits a deterministic
+`npm-publish-identity:` receipt naming the repository, policy version, and
+accepted package manifests. The reusable workflow refers to the action with
+GitHub's provider-self `$/` reference, so it runs at the exact
+reusable-workflow commit without a second caller-facing action allowlist or ref
+to migrate.
 
 An `ext-<id>` repository may publish only
 `@sneat/extension-<id>-contract`; an implementation repository may publish its
@@ -67,21 +74,39 @@ exception. The policy also carries the exact legacy spelling mappings for
 `ext-kids-club`, `ext-rsvp-express`, and `ext-sneat-team`, plus the reviewed
 explicit public package set in `sneat-co/sneat-libs`; unknown public packages
 and unscoped public packages fail before publishing. A publish workspace must
-also contain at least one approved source-visible public package identity. The
-publish command is therefore required to publish only those source manifests:
-generated post-build package identities are deliberately unsupported rather
-than being allowed to reach the token without a provider ownership check.
+also contain at least one approved source-visible public package identity.
+Those source checks cannot prove a caller-controlled post-build publish command
+still selects the same package; that is precisely why the legacy path is not
+enforceable.
+
+The strict contract is the provider-first migration target, not a
+currently enabled publishing workflow. Its caller declaration will be exact:
+one static package directory and one exact package name. Token-free caller
+install and prepare steps will complete first. The provider will then recheck
+the exact source manifest, run `npm pack --ignore-scripts`, read the packed
+`package/package.json`, require its bytes and identity to match the approved
+source manifest, and publish only that provider-packed tarball in an isolated
+step. The npm credential will exist only in that provider-owned publish step;
+there will be no arbitrary caller shell under it. This binds source and
+post-prepare package identity, while deliberately not claiming to prove package
+contents or side effects beyond the closed pack/publish mechanism.
 
 `@sneat/extension-template-contract` is a separate, non-bypass exception. It
 is accepted only from `sneat-co/sneat-ext-contract-template`; any other caller
 is refused for the placeholder package, a retained template package name,
 template project/path, or a retained `@sneat/*template*` dependency. A manual
-template scaffold is unarmed for the organization audit, but dispatching its
-publisher still runs this preflight and cannot publish until it is rebranded.
+template scaffold is unarmed for the organization audit. It must still be
+rebranded before migration to the strict publisher; dispatching the legacy
+publisher continues to run only the diagnostic source preflight.
 
-The same action performs a caller-local scan for an automatic direct publisher
-that duplicates a shared-provider caller. A local organization scan over
-canonical clones (not hidden or linked worktrees) is diagnostic only:
+The structural audit follows top-level workflow triggers, reusable workflows,
+local composite actions, scripts, package scripts, package-manager workspace
+commands, credential propagation, and static working directories. It fails
+closed for an unresolved or dynamic value that could reach a publishing sink;
+dynamic data proven outside every publish-capable path remains diagnostic. The
+same action performs a caller-local scan for an automatic direct publisher that
+duplicates a shared-provider caller. A local organization scan over canonical
+clones (not hidden or linked worktrees) is diagnostic only:
 
 ```sh
 node actions/check-npm-publish-identity/audit.mjs \
@@ -91,24 +116,28 @@ node actions/check-npm-publish-identity/audit.mjs \
 The audit records repository, checked-out Git ref, workflow path and trigger
 class, package manifest path, and package name. It exits non-zero for duplicate
 automatic owners; `workflow_dispatch`-only and missing-trigger workflows are
-reported as unarmed rather than being mistaken for a release publisher. Identity
-findings are always present in the receipt; add `--require-publish-identities`
-to refuse even unarmed source content during an explicit rebrand audit. See
-the [NPM publisher package identity Feature](spec/features/npm-publish-package-identity/README.md)
+reported as unarmed rather than being mistaken for a release publisher. An
+unresolvable publishing chain reports `inconclusive`, never clean. Identity
+findings are always present in the receipt; add
+`--require-publish-identities` to refuse even unarmed source content during an
+explicit rebrand audit. See the [NPM publisher package identity Feature](spec/features/npm-publish-package-identity/README.md)
 for the current audit findings and required cross-repository migration decisions.
 
 The provider-owned, manual-only
 [`audit-npm-publish-identities.yml`](.github/workflows/audit-npm-publish-identities.yml)
 is the authoritative path. It requires the existing
-`SNEAT_ORGANIZATION_AUDIT_TOKEN` with read visibility into every public and
-private Sneat Co. repository (a repository-scoped `github.token` is refused as
-incomplete), enumerates the non-archived owner set through the GitHub API,
-fetches and checks out each recorded immutable default SHA, then fetches a fresh
-GitHub API inventory while auditing. Its run log is the receipt: it names the
-owner set, archive policy, filters, fetched time, default refs/SHAs and exact
-workflow/package evidence; it uploads no artifact and prints no credential.
-`--require-authoritative` consequently requires `--github-api` and that token;
-it will not accept a local `--inventory` JSON file as an authority claim.
+`SNEAT_ORGANIZATION_AUDIT_TOKEN` to authenticate as an active Sneat Co.
+organization owner using a classic user token with the `repo` scope;
+fine-grained, limited, or SSO-ambiguous credentials are refused because they
+cannot prove all-repository entitlement. It enumerates the non-archived owner
+set through the GitHub API, fetches and detached-checks out each recorded
+immutable default SHA, then obtains a fresh GitHub API inventory while auditing.
+Its run log is the receipt: it names the owner set, archive policy, filters,
+fetched time, default refs/SHAs, entitlement result, and exact workflow/package
+evidence; it uploads no artifact and prints no credential.
+`--require-authoritative` consequently requires `--github-api` and that closed
+token path; it will not accept a local `--inventory` JSON file as an authority
+claim.
 
 Shared **reusable GitHub Actions workflows** and **composite actions** for
 sneat-co repositories (e.g. [`assetus`](https://github.com/sneat-co/assetus),

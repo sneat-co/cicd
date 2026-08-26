@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { safeDetail, safeError } from './redact.mjs';
+import { parseStrictJson } from './strict-json.mjs';
 
 const actionDirectory = dirname(fileURLToPath(import.meta.url));
-const policy = JSON.parse(readFileSync(join(actionDirectory, 'policy.json'), 'utf8'));
+const policy = parseStrictJson(readFileSync(join(actionDirectory, 'policy.json'), 'utf8'));
 const skippedDirectories = new Set([
   '.git', '.nx', '.angular', '.wb', '.worktrees', 'coverage', 'dist', 'node_modules',
 ]);
@@ -40,9 +42,9 @@ function collectNamedFiles(root, wantedNames) {
 
 function readJson(path, findings, code) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (error) {
-    findings.push({ code, path, detail: error.message });
+    return parseStrictJson(readFileSync(path, 'utf8'));
+  } catch {
+    findings.push({ code, path, detail: 'invalid JSON manifest' });
     return undefined;
   }
 }
@@ -111,20 +113,51 @@ function sortedFindings(findings) {
   ));
 }
 
-export function inspectPackageIdentity({ repository, directory }) {
+export function inspectPackageIdentity({ repository, directory, expectedPackage, manifestOnly = false }) {
   const findings = [];
   const absoluteDirectory = resolve(directory);
   if (!isRepositorySlug(repository)) {
     findings.push({ code: 'INVALID_REPOSITORY', path: '.', detail: repository || '(empty)' });
-    return { findings, packages: [], directory: absoluteDirectory };
+    return { findings, package_claims: [], packages: [], directory: absoluteDirectory };
   }
   if (!existsSync(absoluteDirectory) || !statSync(absoluteDirectory).isDirectory()) {
     findings.push({ code: 'MISSING_DIRECTORY', path: absoluteDirectory, detail: 'publish workspace does not exist' });
-    return { findings, packages: [], directory: absoluteDirectory };
+    return { findings, package_claims: [], packages: [], directory: absoluteDirectory };
   }
 
-  const packagePaths = collectNamedFiles(absoluteDirectory, new Set(['package.json']));
+  let packagePaths;
+  if (manifestOnly) {
+    const manifestPath = join(absoluteDirectory, 'package.json');
+    if (!existsSync(manifestPath)) {
+      packagePaths = [];
+    } else {
+      try {
+        const metadata = lstatSync(manifestPath);
+        if (!metadata.isFile() || metadata.isSymbolicLink()) {
+          findings.push({
+            code: 'UNSAFE_PACKAGE_MANIFEST_PATH',
+            path: 'package.json',
+            detail: 'exact package manifest must be a regular non-symlinked file',
+          });
+          packagePaths = [];
+        } else {
+          packagePaths = [manifestPath];
+        }
+      } catch {
+        findings.push({
+          code: 'UNSAFE_PACKAGE_MANIFEST_PATH',
+          path: 'package.json',
+          detail: 'exact package manifest cannot be verified as a regular file',
+        });
+        packagePaths = [];
+      }
+    }
+  } else {
+    packagePaths = collectNamedFiles(absoluteDirectory, new Set(['package.json']));
+  }
   const projectPaths = collectNamedFiles(absoluteDirectory, new Set(['project.json']));
+  const candidates = [];
+  const packageClaims = [];
   const packages = [];
   const canonicalTemplate = isCanonicalTemplateRepository(repository);
 
@@ -139,7 +172,7 @@ export function inspectPackageIdentity({ repository, directory }) {
           ? 'TEMPLATE_PACKAGE_REQUIRES_CANONICAL_REPOSITORY'
           : 'UNREBRANDED_TEMPLATE_PACKAGE',
         path: pathRelative,
-        detail: packageName,
+        detail: 'template-like package name remains',
       });
     }
     if (!canonicalTemplate) {
@@ -151,7 +184,7 @@ export function inspectPackageIdentity({ repository, directory }) {
             findings.push({
               code: 'UNREBRANDED_TEMPLATE_DEPENDENCY',
               path: pathRelative,
-              detail: `${section}.${dependency}=${range}`,
+              detail: 'template-like dependency remains',
             });
           }
         }
@@ -159,14 +192,19 @@ export function inspectPackageIdentity({ repository, directory }) {
     }
     if (manifest.private === true) continue;
     if (typeof packageName !== 'string' || packageName.trim() === '') {
-      findings.push({ code: 'INVALID_PUBLIC_PACKAGE_NAME', path: pathRelative, detail: String(packageName) });
+      findings.push({ code: 'INVALID_PUBLIC_PACKAGE_NAME', path: pathRelative, detail: 'public package has no valid name' });
+      continue;
+    }
+    if (expectedPackage && packageName !== expectedPackage) {
+      findings.push({ code: 'EXPECTED_PACKAGE_MISMATCH', path: pathRelative, detail: 'public package does not match the provider-required identity' });
       continue;
     }
     if (!packageName.startsWith('@') && !policyOwnsPackage(repository, packageName)) {
-      findings.push({ code: 'UNSCOPED_PUBLIC_PACKAGE', path: pathRelative, detail: packageName });
+      findings.push({ code: 'UNSCOPED_PUBLIC_PACKAGE', path: pathRelative, detail: 'unscoped public packages need an exact provider-owned mapping' });
       continue;
     }
-    packages.push({ manifest, name: packageName, path, pathRelative });
+    packageClaims.push({ name: packageName, path: pathRelative });
+    candidates.push({ manifest, name: packageName, path, pathRelative });
   }
 
   for (const path of projectPaths) {
@@ -174,25 +212,25 @@ export function inspectPackageIdentity({ repository, directory }) {
     if (!project || canonicalTemplate) continue;
     const pathRelative = relative(absoluteDirectory, path) || basename(path);
     if (typeof project.name === 'string' && project.name.toLowerCase().includes('template')) {
-      findings.push({ code: 'UNREBRANDED_TEMPLATE_PROJECT', path: pathRelative, detail: project.name });
+      findings.push({ code: 'UNREBRANDED_TEMPLATE_PROJECT', path: pathRelative, detail: 'template-like project name remains' });
     }
     if (pathRelative.split(sep).some((segment) => segment.toLowerCase().includes('template'))) {
       findings.push({ code: 'UNREBRANDED_TEMPLATE_PATH', path: pathRelative, detail: 'template remains in project path' });
     }
   }
 
-  for (const candidate of packages) {
+  for (const candidate of candidates) {
     const declaredRepository = candidate.manifest.repository;
     const normalizedDeclaredRepository = normalizeRepository(declaredRepository);
     if (declaredRepository !== undefined && !normalizedDeclaredRepository) {
-      findings.push({ code: 'INVALID_PACKAGE_REPOSITORY', path: candidate.pathRelative, detail: String(declaredRepository) });
+      findings.push({ code: 'INVALID_PACKAGE_REPOSITORY', path: candidate.pathRelative, detail: 'repository metadata is not a supported GitHub repository reference' });
       continue;
     }
     if (normalizedDeclaredRepository && normalizedDeclaredRepository !== repository) {
       findings.push({
         code: 'PACKAGE_REPOSITORY_MISMATCH',
         path: candidate.pathRelative,
-        detail: `${candidate.name} declares ${normalizedDeclaredRepository}, not ${repository}`,
+        detail: 'package repository metadata does not corroborate the checked-out repository',
       });
       continue;
     }
@@ -203,25 +241,28 @@ export function inspectPackageIdentity({ repository, directory }) {
         // second generic mismatch that obscures the copied-scaffold fix.
         continue;
       }
+      if (canonicalTemplate) packages.push(candidate);
       continue;
     }
     if (candidate.name.toLowerCase().includes('template')) continue;
-    if (conventionOwnsPackage(repository, candidate.name)) continue;
-    if (policyOwnsPackage(repository, candidate.name)) continue;
-    findings.push({
-      code: 'UNKNOWN_PACKAGE_IDENTITY',
-      path: candidate.pathRelative,
-      detail: `${candidate.name} has no provider-owned ownership mapping for ${repository}`,
-    });
+    if (conventionOwnsPackage(repository, candidate.name) || policyOwnsPackage(repository, candidate.name)) {
+      packages.push(candidate);
+    } else {
+      findings.push({
+        code: 'UNKNOWN_PACKAGE_IDENTITY',
+        path: candidate.pathRelative,
+        detail: 'public package has no provider-owned ownership mapping',
+      });
+    }
   }
 
   if (canonicalTemplate) {
-    for (const candidate of packages) {
+    for (const candidate of candidates) {
       if (candidate.name !== policy.template_exception.package) {
         findings.push({
           code: 'TEMPLATE_REPOSITORY_MAY_ONLY_PUBLISH_TEMPLATE_PACKAGE',
           path: candidate.pathRelative,
-          detail: candidate.name,
+          detail: 'canonical template repository contains another public package',
         });
       }
     }
@@ -238,6 +279,7 @@ export function inspectPackageIdentity({ repository, directory }) {
   return {
     directory: absoluteDirectory,
     findings: sortedFindings(findings),
+    package_claims: packageClaims.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
     packages: packages.map(({ name, pathRelative }) => ({ name, path: pathRelative })).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
   };
 }
@@ -247,23 +289,30 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`npm-publish-identity: ARGUMENT_ERROR ${error.message}`);
+    console.error(`npm-publish-identity: ARGUMENT_ERROR ${safeError(error)}`);
     process.exit(2);
   }
-  const result = inspectPackageIdentity({ repository: args.repository, directory: args.directory || '.' });
+  const result = inspectPackageIdentity({
+    repository: args.repository,
+    directory: args.directory || '.',
+    expectedPackage: args.package,
+    manifestOnly: args['manifest-only'] === 'true',
+  });
   const report = {
-    directory: result.directory,
+    directory: safeDetail(result.directory),
     package_count: result.packages.length,
-    packages: result.packages,
+    packages: result.packages.map((pkg) => ({ name: safeDetail(pkg.name), path: safeDetail(pkg.path) })),
     policy_version: policy.policy_version,
-    repository: args.repository || '',
+    repository: safeDetail(args.repository || ''),
     status: result.findings.length === 0 ? 'passed' : 'failed',
   };
   console.log(`npm-publish-identity: ${JSON.stringify(report)}`);
   for (const finding of result.findings) {
-    console.error(`npm-publish-identity: [${finding.code}] ${finding.path}: ${finding.detail}`);
+    console.error(`npm-publish-identity: [${finding.code}] ${safeDetail(finding.path)}: ${safeDetail(finding.detail)}`);
   }
   if (result.findings.length > 0) process.exit(1);
 }
+
+export { policy };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

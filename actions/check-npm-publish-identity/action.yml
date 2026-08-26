@@ -8,6 +8,22 @@ inputs:
     description: Repository-relative directory containing the package workspace.
     required: false
     default: .
+  package-name:
+    description: Exact public package name required by the strict publisher.
+    required: false
+    default: ""
+  artifact-directory:
+    description: Provider-controlled directory for a packed strict-publish artifact.
+    required: false
+    default: ""
+
+outputs:
+  artifact:
+    description: Absolute path of the exact package tarball prepared by the provider.
+    value: ${{ steps.pack.outputs.artifact }}
+  receipt:
+    description: Deterministic package/artifact identity receipt.
+    value: ${{ steps.pack.outputs.receipt }}
 
 runs:
   using: composite
@@ -16,15 +32,21 @@ runs:
       shell: bash
       env:
         PUBLISH_DIRECTORY: ${{ inputs.directory }}
+        PUBLISH_PACKAGE: ${{ inputs.package-name }}
         PUBLISH_REPOSITORY: ${{ github.repository }}
       run: |
         set -euo pipefail
         publish_directory="$(node "$GITHUB_ACTION_PATH/resolve-publish-directory.mjs" \
           --workspace "$GITHUB_WORKSPACE" \
           --directory "$PUBLISH_DIRECTORY")"
+        package_args=()
+        if [[ -n "$PUBLISH_PACKAGE" ]]; then
+          package_args=(--package "$PUBLISH_PACKAGE" --manifest-only true)
+        fi
         node "$GITHUB_ACTION_PATH/check.mjs" \
           --repository "$PUBLISH_REPOSITORY" \
-          --directory "$publish_directory"
+          --directory "$publish_directory" \
+          "${package_args[@]}"
 
     - name: Refuse a caller-local armed publisher duplicate
       shell: bash
@@ -36,3 +58,31 @@ runs:
           --repository "$PUBLISH_REPOSITORY" \
           --repository-root "$GITHUB_WORKSPACE" \
           --require-no-direct-publisher
+
+    - name: Pack exact provider-owned package artifact
+      id: pack
+      if: ${{ inputs.artifact-directory != '' }}
+      shell: bash
+      env:
+        PACK_ARTIFACT_DIRECTORY: ${{ inputs.artifact-directory }}
+        PUBLISH_DIRECTORY: ${{ inputs.directory }}
+        PUBLISH_PACKAGE: ${{ inputs.package-name }}
+        PUBLISH_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$PUBLISH_PACKAGE" ]]; then
+          echo 'npm-publish-artifact: ERROR package-name is required with artifact-directory' >&2
+          exit 2
+        fi
+        publish_directory="$(node "$GITHUB_ACTION_PATH/resolve-publish-directory.mjs" \
+          --workspace "$GITHUB_WORKSPACE" \
+          --directory "$PUBLISH_DIRECTORY")"
+        artifact_directory="$(node "$GITHUB_ACTION_PATH/resolve-publish-directory.mjs" \
+          --workspace "$RUNNER_TEMP" \
+          --directory "$PACK_ARTIFACT_DIRECTORY")"
+        node "$GITHUB_ACTION_PATH/pack-package.mjs" \
+          --repository "$PUBLISH_REPOSITORY" \
+          --directory "$publish_directory" \
+          --package "$PUBLISH_PACKAGE" \
+          --artifact-directory "$artifact_directory" \
+          --github-output "$GITHUB_OUTPUT"
