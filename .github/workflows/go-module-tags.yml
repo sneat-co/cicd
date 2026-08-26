@@ -1,0 +1,88 @@
+name: Go module tags (reusable)
+
+# Reusable workflow: creates and pushes idempotent, validated annotated Git
+# tags for one or more Go modules living in subdirectories of the calling
+# repository, in the `<module-dir>/v<version>` shape Go uses to version a
+# module that is not at the repository root
+# (https://go.dev/ref/mod#vcs-version).
+#
+# The CALLER derives the {dir, version} pairs from its own consumed release
+# version plans -- e.g. an Nx release version plan, where a family's version
+# is shared lockstep between its npm package and its Go module -- and passes
+# them explicitly. This workflow never guesses versions or scans the tree for
+# changes: manual/implicit multi-module tagging is exactly the tag-vs-npm
+# desync failure mode this workflow exists to prevent (see
+# sneat-co/sneat-libs spec/features/ext-contracts-monorepo/README.md).
+#
+# Call from a consumer repo, after the step that decided what got released:
+#
+#   jobs:
+#     tag-go-modules:
+#       needs: release
+#       permissions:
+#         contents: write
+#       uses: sneat-co/cicd/.github/workflows/go-module-tags.yml@main
+#       with:
+#         modules: |
+#           [
+#             {"dir": "contactus", "version": "1.4.0"},
+#             {"dir": "taxus", "version": "0.3.1"}
+#           ]
+#
+# Authentication:
+# - The calling job MUST grant `permissions: contents: write` -- this
+#   workflow pushes tags using the checkout-persisted GITHUB_TOKEN, and a
+#   workflow_call job's effective permissions are capped by whatever the
+#   caller grants, regardless of what this workflow itself requests.
+#
+# Behavior:
+# - Every {dir, version} pair is validated (go.mod exists at `dir` and its
+#   `module` path equals `github.com/<owner>/<repo>/<dir>`) and checked
+#   against any existing tag BEFORE any tag is created or pushed, so one bad
+#   pair in a batch never leaves earlier pairs half-tagged.
+# - Idempotent: re-running with a tag that already points at the target
+#   commit succeeds with a notice. A tag that exists at a DIFFERENT commit
+#   fails the run -- this workflow never moves a tag.
+# - Every pushed (or already-correct) tag is re-verified with
+#   `git ls-remote` against the calling repository before the job succeeds,
+#   and the tag -> SHA table in the job summary is the authoritative receipt
+#   for the run.
+
+on:
+  workflow_call:
+    inputs:
+      modules:
+        description: >-
+          JSON array of {"dir": "<module-dir>", "version": "<semver, no v
+          prefix>"} pairs to tag. Required, non-empty. The caller derives
+          these from its own consumed version plans -- this workflow never
+          guesses versions or scans for changes itself.
+        type: string
+        required: true
+      ref:
+        description: >-
+          Commit SHA to tag. Defaults to this workflow's github.sha.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag Go modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Tag and push Go modules
+        uses: sneat-co/cicd/actions/go-module-tags@main
+        with:
+          modules: ${{ inputs.modules }}
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}

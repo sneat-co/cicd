@@ -62,6 +62,7 @@ a few lines long and upgrades happen once.
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
 | `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke), `setup-tinygo` (default `false`, installs TinyGo before the build for callers compiling Go to wasm), `tinygo-version` (default `0.41.1`); secret `CLOUDFLARE_API_TOKEN` |
 | `deps-policy.yml` | Gate a Go module against the fleet's dependency and layering policy (`policy/sneat-backend.yaml`). Lexical scan of import blocks and `go.mod` — **no credentials, no module downloads**, so it still reports when the build cannot start | `working-directory` (default `backend`), `policy` (override the document), `policy-ref` (ref of this repo the default policy is read from, default `main`), `wb-version` (default `v0.37.0`, the release that introduced the command; pinned rather than `latest`), `strict` (default `false`; only ever tightens) |
+| `go-module-tags.yml` | Create and push idempotent, validated annotated Git tags (`<module-dir>/v<version>`) for one or more Go modules in subdirectories of the calling repository. The caller passes explicit `{dir, version}` pairs (e.g. from its own consumed Nx release version plans) — this workflow never guesses versions or scans for changes. Fails loudly on a `go.mod` module-path mismatch and refuses to move an existing tag onto a different commit; requires `permissions: contents: write` in the caller | `modules` (required JSON array of `{"dir", "version"}` pairs), `ref` (optional commit SHA, default `github.sha`) |
 
 ### Composite action (`actions/`)
 
@@ -69,6 +70,7 @@ a few lines long and upgrades happen once.
 |--------|---------|
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. Used by `nx-ci.yml` and `playwright-e2e.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
+| `go-module-tags` | Validate `{dir, version}` pairs against each module's `go.mod`, then create and push idempotent annotated `<dir>/v<version>` tags. Used by `go-module-tags.yml`; standalone via `GO_MODULE_TAGS_MODULES=... GITHUB_REPOSITORY=... actions/go-module-tags/tag-modules.sh`. |
 
 ## Dependency policy (`policy/`)
 
