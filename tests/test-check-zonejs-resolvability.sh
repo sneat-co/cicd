@@ -87,7 +87,7 @@ expect_failure 'PNPM_WHY_COMMAND_FAILED' run_guard '' 73 'simulated pnpm failure
 # The default-on caller contract remains a post-install provider action, with
 # a deliberate false opt-out and no duplicated inline shell implementation.
 last_install_line="$(rg -n 'uses: sneat-co/cicd/actions/setup-pnpm-node@main' "$workflow" | tail -1 | cut -d: -f1)"
-guard_line="$(rg -n 'uses: sneat-co/cicd/actions/check-zonejs-resolvability@main' "$workflow" | cut -d: -f1)"
+guard_line="$(rg -n 'uses: \$/actions/check-zonejs-resolvability' "$workflow" | cut -d: -f1 || true)"
 zonejs_default="$(awk '
   /^      check-zonejs:/ { inside = 1; next }
   inside && /^      [[:alnum:]-]+:/ { exit }
@@ -95,7 +95,7 @@ zonejs_default="$(awk '
 ' "$workflow")"
 if [[ "$zonejs_default" != true ]] \
   || ! rg -Fq 'if: ${{ inputs.check-zonejs }}' "$workflow" \
-  || ! rg -Fq 'uses: sneat-co/cicd/actions/check-zonejs-resolvability@main' "$workflow" \
+  || ! rg -Fq 'uses: $/actions/check-zonejs-resolvability' "$workflow" \
   || ! rg -Fq 'directory: ${{ inputs.working-directory }}' "$workflow" \
   || rg -Fq 'pnpm why -r zone.js --json' "$workflow" \
   || ! rg -Fq 'node "$GITHUB_ACTION_PATH/check.mjs"' "$action" \

@@ -159,7 +159,7 @@ jobs:
 
       - name: Zone.js regression guard
         if: ${{ inputs.check-zonejs }}
-        uses: sneat-co/cicd/actions/check-zonejs-resolvability@main
+        uses: $/actions/check-zonejs-resolvability
         with:
           directory: ${{ inputs.working-directory }}
 

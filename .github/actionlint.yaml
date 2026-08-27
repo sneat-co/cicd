@@ -5,3 +5,6 @@ paths:
   .github/workflows/npm-publish.yml:
     ignore:
       - 'specifying action "\$/actions/check-npm-publish-identity" in invalid format because ref is missing'
+  .github/workflows/nx-ci.yml:
+    ignore:
+      - 'specifying action "\$/actions/check-zonejs-resolvability" in invalid format because ref is missing'
