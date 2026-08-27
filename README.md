@@ -164,6 +164,7 @@ a few lines long and upgrades happen once.
 |--------|---------|
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. Used by `nx-ci.yml` and `playwright-e2e.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
+| `check-zonejs-resolvability` | Fail closed unless `pnpm why -r zone.js --json` returns exactly an empty JSON array. Used by `nx-ci.yml` after install when its default-on `check-zonejs` input is true; callers may set that input to `false` only as a deliberate reviewed opt-out. |
 | `go-module-tags` | Validate `{dir, version}` pairs against each module's `go.mod`, then create and push idempotent annotated `<dir>/v<version>` tags. Used by `go-module-tags.yml`; standalone via `GO_MODULE_TAGS_MODULES=... GITHUB_REPOSITORY=... actions/go-module-tags/tag-modules.sh`. |
 
 ## Dependency policy (`policy/`)

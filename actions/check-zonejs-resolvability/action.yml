@@ -1,0 +1,18 @@
+name: Check Zone.js resolvability
+description: >-
+  Fails closed unless pnpm why -r zone.js --json returns one empty JSON array.
+
+inputs:
+  directory:
+    description: Directory containing the installed pnpm workspace to inspect
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Refuse a resolvable Zone.js package
+      shell: bash
+      env:
+        ZONEJS_WORKSPACE: ${{ inputs.directory }}
+      run: node "$GITHUB_ACTION_PATH/check.mjs" "$ZONEJS_WORKSPACE"

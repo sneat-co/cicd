@@ -28,6 +28,9 @@ jobs:
       - name: Run peer-range check tests
         run: tests/test-check-peer-ranges.sh
 
+      - name: Run Zone.js resolvability guard tests
+        run: tests/test-check-zonejs-resolvability.sh
+
       - name: Run go-module-tags tests
         run: tests/test-go-module-tags.sh
 
