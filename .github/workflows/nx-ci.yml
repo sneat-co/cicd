@@ -44,6 +44,13 @@ on:
         type: string
         required: false
         default: "lint test build"
+      parallelism:
+        description: >-
+          Optional maximum number of Nx tasks to run concurrently. Zero keeps
+          Nx's default parallelism.
+        type: number
+        required: false
+        default: 0
       node-version:
         type: string
         required: false
@@ -181,7 +188,14 @@ jobs:
 
       - name: Nx run-many
         working-directory: ${{ inputs.working-directory }}
-        run: pnpm exec nx run-many -t ${{ inputs.targets }}
+        shell: bash
+        run: |
+          parallelism="${{ inputs.parallelism }}"
+          if (( parallelism > 0 )); then
+            pnpm exec nx run-many -t ${{ inputs.targets }} --parallel="$parallelism"
+          else
+            pnpm exec nx run-many -t ${{ inputs.targets }}
+          fi
 
       - name: Require a coverage command when a threshold is configured
         if: ${{ inputs.minimum-coverage > 0 && inputs.coverage-command == '' }}
