@@ -110,10 +110,11 @@ on:
       peer-range-strict:
         description: >-
           Fail the job when a package we publish (@sneat/* or @sneat-team/*)
-          declares a bare ^0.0.x/~0.0.x peerDependencies range. Defaults to
-          false (report-only) while the fleet clears its existing bare
-          ranges; flip to true once this repo's @sneat/* peerDependencies use
-          a union, an interval, or an exact pin instead.
+          declares a bare ^0.0.x/~0.0.x peerDependencies range, or an exact
+          (no ^/~) pin outside 0.0.x. Defaults to false (report-only) while
+          the fleet clears its existing violations; flip to true once this
+          repo's @sneat/* peerDependencies use a union, an interval, a caret
+          range, or an exact pin on a 0.0.x version instead.
         type: boolean
         required: false
         default: false
@@ -143,11 +144,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reject bare ^0.0.x peer ranges on packages we publish
+      # `continue-on-error` on THIS step cannot be a computed expression: on
+      # 2026-09-02 we confirmed empirically that GitHub Actions ignores a
+      # dynamic `continue-on-error: ${{ ... }}` on a step that itself `uses:`
+      # a composite action -- the step's outcome (failure) still gets
+      # reported as its conclusion (success), masking the violation
+      # regardless of the input's actual value (a literal `continue-on-error:
+      # true`/`false` on the same kind of step works correctly; only the
+      # expression form on a composite-action step does not). So this step
+      # always continues, and the next step does the real enforcement with a
+      # plain `if:`, which is unaffected by that bug.
+      - name: Reject bare ^0.0.x peer ranges / exact non-0.0.x peer pins on packages we publish
+        id: peer-range-check
         uses: sneat-co/cicd/actions/check-peer-ranges@main
-        continue-on-error: ${{ !inputs.peer-range-strict }}
+        continue-on-error: true
         with:
           directory: .
+
+      - name: Enforce peer-range-strict
+        if: steps.peer-range-check.outcome == 'failure' && inputs.peer-range-strict
+        run: |
+          echo "::error::check-peer-ranges found a violation (see the 'Reject bare ^0.0.x peer ranges / exact non-0.0.x peer pins on packages we publish' step above) and peer-range-strict is true, so this fails the job."
+          exit 1
 
       - name: Setup pnpm + Node
         uses: sneat-co/cicd/actions/setup-pnpm-node@main
