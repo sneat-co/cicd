@@ -37,6 +37,10 @@
       ],
       "groupName": "sneat-co dependencies",
       "groupSlug": "sneat-co-dependencies"
+    },
+    {
+      "description": "Auto-merge dependency updates once checks pass.",
+      "automerge": true
     }
   ]
 }
