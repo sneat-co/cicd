@@ -36,7 +36,12 @@
         "https://github.com/sneat-co/**"
       ],
       "groupName": "sneat-co dependencies",
-      "groupSlug": "sneat-co-dependencies"
+      "groupSlug": "sneat-co-dependencies",
+      "description": "Own libraries are never gated: the fleet must be on the latest sneat-co release always (founder rule 2026-09-02). Third parties keep the weekly window and the 1-day release age above.",
+      "schedule": [
+        "at any time"
+      ],
+      "minimumReleaseAge": null
     },
     {
       "description": "Auto-merge dependency updates once checks pass.",
