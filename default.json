@@ -31,13 +31,12 @@
       "groupSlug": "javascript-dependencies"
     },
     {
-      "description": "Batch dependencies published from the Sneat-Co GitHub organization",
+      "description": "Batch dependencies published from the Sneat-Co GitHub organization. Own libraries are never gated: the fleet must be on the latest sneat-co release always (founder rule 2026-09-02); third parties keep the weekly window and the 1-day release age above. Note that matchSourceUrls can only match a datasource whose source URL is known -- in practice Go modules, whose module path is the repository URL. npm @sneat/* packages publish no `repository` field, so they are covered by the sibling matchPackageNames rule below, not by this one.",
       "matchSourceUrls": [
         "https://github.com/sneat-co/**"
       ],
       "groupName": "sneat-co dependencies",
       "groupSlug": "sneat-co-dependencies",
-      "description": "Own libraries are never gated: the fleet must be on the latest sneat-co release always (founder rule 2026-09-02). Third parties keep the weekly window and the 1-day release age above.",
       "schedule": [
         "at any time"
       ],
