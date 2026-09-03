@@ -44,7 +44,7 @@
       "automerge": true,
       "automergeType": "pr",
       "automergeSchedule": [
-        "after 4am and before 6am"
+        "after 3am and before 7am"
       ],
       "platformAutomerge": false
     },
@@ -63,7 +63,7 @@
       "automerge": true,
       "automergeType": "pr",
       "automergeSchedule": [
-        "after 4am and before 6am"
+        "after 3am and before 7am"
       ],
       "platformAutomerge": false
     },
