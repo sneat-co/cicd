@@ -43,7 +43,10 @@
       "minimumReleaseAge": null,
       "automerge": true,
       "automergeType": "pr",
-      "platformAutomerge": true
+      "automergeSchedule": [
+        "after 3am and before 7am"
+      ],
+      "platformAutomerge": false
     },
     {
       "description": "The same exemption as above, matched by PACKAGE NAME because the rule above cannot reach npm. matchSourceUrls resolves against the `repository` field of a package's registry metadata, and NO @sneat/* npm package publishes one (verified 2026-09-03: @sneat/core, @sneat/extension-calendarius-ui, @sneat/extension-calendarius and @sneat/extension-calendarius-contract all return an empty repository.url). So the source-URL exemption only ever applied to Go modules, whose datasource IS the source URL. npm @sneat/* packages fell through to the JavaScript-dependencies group, the weekly Monday window and the 1-day release age -- and internalChecksFilter=strict hid them from the Dependency Dashboard entirely while they waited, so the gap was invisible rather than merely slow.",
@@ -59,7 +62,10 @@
       "minimumReleaseAge": null,
       "automerge": true,
       "automergeType": "pr",
-      "platformAutomerge": true
+      "automergeSchedule": [
+        "after 3am and before 7am"
+      ],
+      "platformAutomerge": false
     },
     {
       "description": "Auto-merge dependency updates once checks pass.",
