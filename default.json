@@ -50,6 +50,7 @@
       "matchPackageNames": [
         "@sneat/**"
       ],
+      "rangeStrategy": "update-lockfile",
       "groupName": "sneat-co dependencies",
       "groupSlug": "sneat-co-dependencies",
       "schedule": [
