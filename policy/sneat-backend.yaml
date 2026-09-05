@@ -22,7 +22,7 @@
 
 groups:
   - {name: own-repo,                 match: ["<self>/..."]}
-  - {name: extension-contract,       match: ["github.com/sneat-co/ext-*/..."]}
+  - {name: extension-contract,       match: ["github.com/sneat-co/ext-*/...", "github.com/sneat-co/sneat-ext-contracts/..."]}
   - {name: host,                     match: ["github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}/..."]}
   - {name: shared-kernel,            match: ["github.com/sneat-co/{sneat-go-core,sneat-core-modules}/..."]}
   - {name: extension-implementation, match: ["github.com/sneat-co/*/...", "github.com/sneat-games/*/..."]}
@@ -88,6 +88,7 @@ layers:
 
 expect:
   - {import: "github.com/sneat-co/ext-calendarius/backend/facade4calendarius", group: extension-contract}
+  - {import: "github.com/sneat-co/sneat-ext-contracts/splitus/contract4splitus", group: extension-contract}
   - {import: "github.com/sneat-co/calendarius/backend/dbo4calendarius",        group: extension-implementation}
   - {import: "github.com/sneat-co/sneat-go-core/apicore",                      group: shared-kernel}
   - {import: "github.com/sneat-co/sneat-go/pkg/modules",                       group: host}
