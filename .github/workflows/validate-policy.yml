@@ -20,7 +20,11 @@ on:
     branches: [main]
     paths: ["policy/**"]
   pull_request:
-    paths: ["policy/**", ".github/workflows/validate-policy.yml"]
+    paths:
+      - "policy/**"
+      - ".github/workflows/deps-policy.yml"
+      - ".github/workflows/validate-policy.yml"
+      - "tests/test-extension-storage-boundary.sh"
   workflow_dispatch:
 
 jobs:
@@ -74,3 +78,6 @@ jobs:
             wb deps policy test "$document"
             echo "::endgroup::"
           done
+
+      - name: Test extension storage boundary
+        run: tests/test-extension-storage-boundary.sh
