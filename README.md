@@ -61,7 +61,7 @@ a few lines long and upgrades happen once.
 | `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version`, `peer-range-strict` (default `false`; gates bare `^0.0.x` peer ranges on `@sneat/*` packages when `true`) |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
 | `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke), `setup-tinygo` (default `false`, installs TinyGo before the build for callers compiling Go to wasm), `tinygo-version` (default `0.41.1`); secret `CLOUDFLARE_API_TOKEN` |
-| `deps-policy.yml` | Gate a Go module against the fleet's dependency and layering policy (`policy/sneat-backend.yaml`). Lexical scan of import blocks and `go.mod` — **no credentials, no module downloads**, so it still reports when the build cannot start | `repository-type` (required), `working-directory` (default `backend`), `policy` (override the document), `policy-ref` (ref of this repo the default policy is read from, default `main`), `wb-version` (default `v0.37.0`, the release that introduced the command; pinned rather than `latest`), `strict` (default `false`; only ever tightens) |
+| `deps-policy.yml` | Gate a Go module against the fleet's dependency and layering policy (`policy/sneat-backend.yaml`). Lexical scan of import blocks and `go.mod` — **no credentials, no module downloads**, so it still reports when the build cannot start | `working-directory` (default `backend`), `policy` (override the document), `policy-ref` (ref of this repo the default policy is read from, default `main`), `wb-version` (default `v0.37.0`, the release that introduced the command; pinned rather than `latest`), `strict` (default `false`; only ever tightens) |
 | `go-module-tags.yml` | Create and push idempotent, validated annotated Git tags (`<module-dir>/v<version>`) for one or more Go modules in subdirectories of the calling repository. The caller passes explicit `{dir, version}` pairs (e.g. from its own consumed Nx release version plans) — this workflow never guesses versions or scans for changes. Fails loudly on a `go.mod` module-path mismatch and refuses to move an existing tag onto a different commit; requires `permissions: contents: write` in the caller | `modules` (required JSON array of `{"dir", "version"}` pairs), `ref` (optional commit SHA, default `github.sha`) |
 
 ### Composite action (`actions/`)
@@ -96,11 +96,10 @@ policy: sneat-co/cicd//policy/sneat-backend.yaml
 type: extension-implementation
 ```
 
-The `type` declaration is required for governed Sneat backend repositories.
-Module-path detection remains a diagnostic convenience in WB, but CI must state
-the type explicitly through the reusable workflow's required `repository-type`
-input. This keeps local checks and CI on the same architecture boundary and
-prevents a module rename from silently changing the applied policy.
+The `type` declaration is required for governed Sneat backend repositories and
+is the single source of truth for local checks and CI. Module-path detection
+remains a diagnostic convenience in WB; the reusable workflow fails when WB
+reports a detected type instead of a declared one.
 
 Extension implementation source and tests may use DALgo and tests may use
 `dalgo2memory`. They may not import storage drivers such as Cloud Firestore,
@@ -194,7 +193,6 @@ jobs:
     uses: sneat-co/cicd/.github/workflows/deps-policy.yml@main
     with:
       working-directory: backend
-      repository-type: extension-implementation
 
   frontend:
     uses: sneat-co/cicd/.github/workflows/nx-ci.yml@main
