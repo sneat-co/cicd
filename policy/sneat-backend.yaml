@@ -27,6 +27,7 @@ groups:
   - {name: shared-kernel,            match: ["github.com/sneat-co/{sneat-go-core,sneat-core-modules}/..."]}
   - {name: extension-implementation, match: ["github.com/sneat-co/*/...", "github.com/sneat-games/*/..."]}
   - {name: bot-framework,            match: ["github.com/bots-go-framework/..."]}
+  - {name: storage-driver,           match: ["cloud.google.com/go/firestore/...", "firebase.google.com/...", "github.com/dal-go/dalgo2firestore/..."]}
   - {name: dalgo-adapter,            match: ["github.com/dal-go/dalgo{2,4}*/..."]}
   - {name: dalgo-core,               match: ["github.com/dal-go/..."]}
   - {name: strongo,                  match: ["github.com/strongo/..."]}
@@ -48,7 +49,7 @@ types:
   - name: host
     detect: ["github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}", "github.com/sneat-co/{sneat-go,sneat-bots,sneat-go-bots}/..."]
     scopes:
-      source: {allow: [own-repo, extension-contract, extension-implementation, shared-kernel, host, bot-framework, dalgo-core, dalgo-adapter, strongo, third-party]}
+      source: {allow: [own-repo, extension-contract, extension-implementation, shared-kernel, host, bot-framework, dalgo-core, dalgo-adapter, storage-driver, strongo, third-party]}
 
   - name: extension-implementation
     detect: ["github.com/sneat-co/*/backend", "github.com/sneat-games/*/backend"]
@@ -91,7 +92,9 @@ expect:
   - {import: "github.com/sneat-co/sneat-go-core/apicore",                      group: shared-kernel}
   - {import: "github.com/sneat-co/sneat-go/pkg/modules",                       group: host}
   - {import: "github.com/dal-go/dalgo/dal",                                    group: dalgo-core}
-  - {import: "github.com/dal-go/dalgo2firestore",                              group: dalgo-adapter}
+  - {import: "cloud.google.com/go/firestore",                                  group: storage-driver}
+  - {import: "firebase.google.com/go/v4",                                      group: storage-driver}
+  - {import: "github.com/dal-go/dalgo2firestore",                              group: storage-driver}
   - {import: "github.com/bots-go-framework/bots-fw/botsfw",                    group: bot-framework}
   - {import: "gopkg.in/yaml.v3",                                               group: third-party}
   - {module: "github.com/sneat-co/calendarius/backend",                        type: extension-implementation}

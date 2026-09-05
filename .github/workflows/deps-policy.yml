@@ -10,6 +10,7 @@ name: Dependency policy (reusable)
 #       uses: sneat-co/cicd/.github/workflows/deps-policy.yml@main
 #       with:
 #         working-directory: backend
+#         repository-type: extension-implementation
 #
 # The scan is lexical — Go import blocks and go.mod, never a resolved module
 # graph — so this job needs NO credentials and downloads none of the module
@@ -26,6 +27,13 @@ on:
         type: string
         required: false
         default: backend
+      repository-type:
+        description: >-
+          Required Sneat backend repository type from policy/sneat-backend.yaml.
+          CI must state the architecture boundary explicitly instead of relying
+          on module-path detection.
+        type: string
+        required: true
       policy:
         description: >-
           Policy document to apply. Defaults to this repository's
@@ -113,9 +121,10 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         env:
           POLICY: ${{ steps.policy.outputs.reference }}
+          REPOSITORY_TYPE: ${{ inputs.repository-type }}
           STRICT: ${{ inputs.strict }}
         run: |
-          args=(deps policy check . --policy "$POLICY" --format github)
+          args=(deps policy check . --policy "$POLICY" --type "$REPOSITORY_TYPE" --format github)
           if [ "$STRICT" = "true" ]; then
             args+=(--strict)
           fi
