@@ -28,12 +28,16 @@ name: Go module tags (reusable)
 #             {"dir": "contactus", "version": "1.4.0"},
 #             {"dir": "taxus", "version": "0.3.1"}
 #           ]
+#       secrets:
+#         git_token: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
 #
 # Authentication:
 # - The calling job MUST grant `permissions: contents: write` -- this
-#   workflow pushes tags using the checkout-persisted GITHUB_TOKEN, and a
 #   workflow_call job's effective permissions are capped by whatever the
 #   caller grants, regardless of what this workflow itself requests.
+# - `git_token` must be able to create tags whose target commit changes files
+#   under `.github/workflows/`. GitHub rejects that operation for an ordinary
+#   Actions token even when it otherwise has `contents: write`.
 #
 # Behavior:
 # - Every {dir, version} pair is validated (go.mod exists at `dir` and its
@@ -65,6 +69,12 @@ on:
         type: string
         required: false
         default: ""
+    secrets:
+      git_token:
+        description: >-
+          Repository token used for checkout and tag pushes. It must be able
+          to create refs whose target commit changes workflow files.
+        required: false
 
 permissions:
   contents: write
@@ -78,6 +88,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          token: ${{ secrets.git_token || github.token }}
           ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           fetch-depth: 0
 
