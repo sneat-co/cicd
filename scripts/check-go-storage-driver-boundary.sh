@@ -44,12 +44,18 @@ if ! jq -e --argjson wbExit "$wb_exit" '
 	((.unparseable // []) | type == "array" and all(.[]; type == "string")) and
 	(.findings | type == "array") and
 	(all(.findings[];
-		(.rule | type == "string" and length > 0) and
-		(.mode | type == "string" and length > 0) and
+		(.rule == "import" or .rule == "layer" or .rule == "role") and
+		(.mode == "enforce" or .mode == "report") and
 		(.file | type == "string" and length > 0) and
 		(.line | type == "number" and . >= 0) and
 		(.scope | type == "string" and length > 0) and
-		((.group // "") | type == "string")
+		(.message | type == "string" and length > 0) and
+		(if .rule == "import" then
+			(.import | type == "string" and length > 0) and
+			(.group | type == "string" and length > 0)
+		else
+			((.group // "") | type == "string")
+		end)
 	)) and
 	(
 		($wbExit == 0 and .blocking == 0) or

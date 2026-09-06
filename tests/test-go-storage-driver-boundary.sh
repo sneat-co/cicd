@@ -113,8 +113,8 @@ fake_bin="$test_root/fake-bin"
 mkdir -p "$fake_bin"
 cat >"$fake_bin/wb" <<'EOF'
 #!/usr/bin/env bash
-printf '{"unexpected":true}\n'
-exit 0
+printf '%s\n' "${FAKE_WB_PAYLOAD:-{\"unexpected\":true}}"
+exit "${FAKE_WB_EXIT:-0}"
 EOF
 chmod +x "$fake_bin/wb"
 set +e
@@ -124,6 +124,28 @@ set -e
 if [[ "$malformed_code" -ne 2 ]] || ! grep -qF 'malformed or inconsistent' <<<"$malformed_output"; then
 	echo "malformed WB JSON must fail closed" >&2
 	echo "$malformed_output" >&2
+	exit 1
+fi
+
+missing_group='{"module":"github.com/sneat-co/example/backend","type":"extension-implementation","typeDetected":false,"policy":"fixture","blocking":1,"reported":0,"findings":[{"rule":"import","mode":"enforce","file":"example.go","line":2,"scope":"source","import":"cloud.google.com/go/firestore","message":"forbidden"}]}'
+set +e
+missing_group_output="$(FAKE_WB_PAYLOAD="$missing_group" FAKE_WB_EXIT=1 PATH="$fake_bin:$PATH" "$checker" "$unrelated" "$policy" 2>&1)"
+missing_group_code=$?
+set -e
+if [[ "$missing_group_code" -ne 2 ]] || ! grep -qF 'malformed or inconsistent' <<<"$missing_group_output"; then
+	echo "an import finding without a group must fail closed" >&2
+	echo "$missing_group_output" >&2
+	exit 1
+fi
+
+unknown_mode='{"module":"github.com/sneat-co/example/backend","type":"extension-implementation","typeDetected":false,"policy":"fixture","blocking":1,"reported":0,"findings":[{"rule":"import","mode":"warning","file":"example.go","line":2,"scope":"source","import":"cloud.google.com/go/firestore","group":"storage-driver","message":"forbidden"}]}'
+set +e
+unknown_mode_output="$(FAKE_WB_PAYLOAD="$unknown_mode" FAKE_WB_EXIT=1 PATH="$fake_bin:$PATH" "$checker" "$unrelated" "$policy" 2>&1)"
+unknown_mode_code=$?
+set -e
+if [[ "$unknown_mode_code" -ne 2 ]] || ! grep -qF 'malformed or inconsistent' <<<"$unknown_mode_output"; then
+	echo "a finding with an unknown mode must fail closed" >&2
+	echo "$unknown_mode_output" >&2
 	exit 1
 fi
 
