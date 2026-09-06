@@ -1,0 +1,100 @@
+name: Go storage driver boundary (reusable)
+
+# Focused adoption gate for repositories that still have unrelated findings
+# under the complete dependency policy. This invokes the same WB scanner,
+# policy resolver, type selection and classification as deps-policy.yml, then
+# gates only centrally enforcing storage-driver imports. A green result here is
+# not a green result for the full dependency policy.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the go.mod to check
+        type: string
+        required: false
+        default: backend
+      policy:
+        description: >-
+          Policy document to apply. Defaults to this repository's
+          sneat-backend.yaml at the ref named by policy-ref.
+        type: string
+        required: false
+        default: ""
+      policy-ref:
+        description: >-
+          Ref of sneat-co/cicd used for the default policy and the checked
+          boundary script.
+        type: string
+        required: false
+        default: main
+      wb-version:
+        description: Pinned WB CLI release to install.
+        type: string
+        required: false
+        default: v0.37.0
+      timeout-minutes:
+        type: number
+        required: false
+        default: 10
+
+permissions:
+  contents: read
+
+jobs:
+  storage-boundary:
+    name: storage driver boundary (focused)
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          path: source
+
+      - name: Checkout boundary implementation
+        uses: actions/checkout@v6
+        with:
+          repository: sneat-co/cicd
+          ref: ${{ inputs.policy-ref }}
+          path: .cicd
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ format('source/{0}/go.mod', inputs.working-directory) }}
+          cache: false
+
+      - name: Install wb
+        env:
+          WB_VERSION: ${{ inputs.wb-version }}
+        run: go install github.com/sneat-dev/wb/cmd/wb@"$WB_VERSION"
+
+      - name: Require a wb that actually has deps policy
+        run: |
+          if ! wb deps --help 2>&1 | grep -qw policy; then
+            echo "::error title=wb too old::the installed wb has no 'deps policy' command."
+            echo "Pin wb-version to a release containing it."
+            wb deps --help || true
+            exit 1
+          fi
+
+      - name: Resolve policy
+        id: policy
+        env:
+          POLICY: ${{ inputs.policy }}
+          POLICY_REF: ${{ inputs.policy-ref }}
+        run: |
+          if [ -n "$POLICY" ]; then
+            echo "reference=$POLICY" >> "$GITHUB_OUTPUT"
+          else
+            echo "reference=https://raw.githubusercontent.com/sneat-co/cicd/${POLICY_REF}/policy/sneat-backend.yaml" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check focused storage-driver boundary
+        working-directory: source/${{ inputs.working-directory }}
+        env:
+          POLICY: ${{ steps.policy.outputs.reference }}
+        run: |
+          "$GITHUB_WORKSPACE/.cicd/scripts/check-go-storage-driver-boundary.sh" . "$POLICY"

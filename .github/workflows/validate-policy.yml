@@ -23,8 +23,11 @@ on:
     paths:
       - "policy/**"
       - ".github/workflows/deps-policy.yml"
+      - ".github/workflows/go-storage-driver-boundary.yml"
       - ".github/workflows/validate-policy.yml"
+      - "scripts/check-go-storage-driver-boundary.sh"
       - "tests/test-extension-storage-boundary.sh"
+      - "tests/test-go-storage-driver-boundary.sh"
   workflow_dispatch:
 
 jobs:
@@ -81,3 +84,6 @@ jobs:
 
       - name: Test extension storage boundary
         run: tests/test-extension-storage-boundary.sh
+
+      - name: Test focused Go storage-driver boundary
+        run: tests/test-go-storage-driver-boundary.sh
