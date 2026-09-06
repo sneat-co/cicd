@@ -149,4 +149,15 @@ if [[ "$unknown_mode_code" -ne 2 ]] || ! grep -qF 'malformed or inconsistent' <<
 	exit 1
 fi
 
+omitted_enforcing='{"module":"github.com/sneat-co/example/backend","type":"extension-implementation","typeDetected":false,"policy":"fixture","blocking":1,"reported":0,"findings":[]}'
+set +e
+omitted_enforcing_output="$(FAKE_WB_PAYLOAD="$omitted_enforcing" FAKE_WB_EXIT=1 PATH="$fake_bin:$PATH" "$checker" "$unrelated" "$policy" 2>&1)"
+omitted_enforcing_code=$?
+set -e
+if [[ "$omitted_enforcing_code" -ne 2 ]] || ! grep -qF 'malformed or inconsistent' <<<"$omitted_enforcing_output"; then
+	echo "a blocking count without its enforcing finding must fail closed" >&2
+	echo "$omitted_enforcing_output" >&2
+	exit 1
+fi
+
 echo "focused Go storage-driver boundary tests passed"

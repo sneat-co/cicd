@@ -39,8 +39,8 @@ if ! jq -e --argjson wbExit "$wb_exit" '
 	(.type | type == "string" and length > 0) and
 	(.typeDetected | type == "boolean") and
 	(.policy | type == "string" and length > 0) and
-	(.blocking | type == "number" and . >= 0) and
-	(.reported | type == "number" and . >= 0) and
+	(.blocking | type == "number" and . >= 0 and floor == .) and
+	(.reported | type == "number" and . >= 0 and floor == .) and
 	((.unparseable // []) | type == "array" and all(.[]; type == "string")) and
 	(.findings | type == "array") and
 	(all(.findings[];
@@ -57,6 +57,8 @@ if ! jq -e --argjson wbExit "$wb_exit" '
 			((.group // "") | type == "string")
 		end)
 	)) and
+	(.blocking == ([.findings[] | select(.mode == "enforce")] | length)) and
+	(.reported == ([.findings[] | select(.mode == "report")] | length)) and
 	(
 		($wbExit == 0 and .blocking == 0) or
 		($wbExit == 1 and .blocking > 0)
