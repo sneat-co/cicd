@@ -58,6 +58,35 @@ jobs:
             ${{ inputs.working-directory }}/go.sum
             ${{ inputs.working-directory }}/go.mod
 
+      # Module download is the one step in this workflow that depends on a
+      # third-party service staying up for the duration of a job. A single
+      # transient read from proxy.golang.org fails the whole job, and on
+      # 2026-09-17 one such read — `stream error; INTERNAL_ERROR` fetching an
+      # unrelated module — failed CI on main in sneat-ext-contracts and
+      # silently cost a release, because both release workflows key on CI
+      # concluding success.
+      #
+      # Downloading up front, with retries, separates "the network was briefly
+      # unavailable" from "this code does not build". Later steps then resolve
+      # from the warm module cache, so they no longer carry that risk. A module
+      # with no dependencies downloads nothing and this is a fast no-op.
+      - name: Download modules
+        run: |
+          set -uo pipefail
+          attempt=1
+          max=3
+          until go mod download; do
+            status=$?
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::go mod download failed after ${max} attempts (exit ${status})"
+              exit "$status"
+            fi
+            delay=$((attempt * 5))
+            echo "::warning::go mod download failed (exit ${status}); retrying in ${delay}s (attempt ${attempt}/${max})"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+          done
+
       - name: Lint — gofmt
         if: ${{ inputs.gofmt != 'off' }}
         env:
