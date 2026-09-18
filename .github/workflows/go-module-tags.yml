@@ -29,15 +29,26 @@ name: Go module tags (reusable)
 #             {"dir": "taxus", "version": "0.3.1"}
 #           ]
 #       secrets:
-#         git_token: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+#         app_id: ${{ vars.SNEAT_RELEASER_APP_ID }}
+#         app_private_key: ${{ secrets.SNEAT_RELEASER_PRIVATE_KEY }}
 #
 # Authentication:
 # - The calling job MUST grant `permissions: contents: write` -- this
 #   workflow_call job's effective permissions are capped by whatever the
 #   caller grants, regardless of what this workflow itself requests.
-# - `git_token` must be able to create tags whose target commit changes files
-#   under `.github/workflows/`. GitHub rejects that operation for an ordinary
-#   Actions token even when it otherwise has `contents: write`.
+# - Creating a tag whose target commit changes files under `.github/workflows/`
+#   is refused for an ordinary Actions token even when it otherwise has
+#   `contents: write`. It needs the `workflows` permission.
+# - Prefer the GitHub App: pass `app_id` + `app_private_key` and this workflow
+#   mints a short-lived installation token scoped to the calling repository.
+#   The Sneat Releaser App (id 4986653) was granted `Workflows: write` on
+#   2026-09-18 for exactly this, on the founder's decision in sneat-co/cicd#38.
+# - `git_token` remains accepted as a fallback for callers that have not been
+#   migrated. It is a long-lived personal credential; an installation token is
+#   minted per run and expires in an hour, so prefer the App.
+# - With neither, `github.token` is used. That is sufficient for every release
+#   commit that does not touch `.github/workflows/`, and fails loudly when one
+#   does rather than tagging the wrong thing.
 #
 # Behavior:
 # - Every {dir, version} pair is validated (go.mod exists at `dir` and its
@@ -70,10 +81,22 @@ on:
         required: false
         default: ""
     secrets:
+      app_id:
+        description: >-
+          GitHub App id used to mint a short-lived installation token for
+          checkout and tag pushes. Requires app_private_key. The App must hold
+          `Workflows: write` to tag a commit that changes workflow files.
+        required: false
+      app_private_key:
+        description: >-
+          Private key for app_id. Passed as a secret so it is never exposed in
+          a log. Requires app_id.
+        required: false
       git_token:
         description: >-
-          Repository token used for checkout and tag pushes. It must be able
-          to create refs whose target commit changes workflow files.
+          Deprecated fallback. Repository token used for checkout and tag
+          pushes when no App credentials are supplied. It must be able to
+          create refs whose target commit changes workflow files.
         required: false
 
 permissions:
@@ -84,11 +107,35 @@ jobs:
     name: Tag Go modules
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The `secrets` context is not available in a step-level `if`, so presence
+    # is resolved once here, at job level, where it is. These hold the strings
+    # "true"/"false" and never the credential itself.
+    env:
+      APP_ID_PRESENT: ${{ secrets.app_id != '' }}
+      APP_KEY_PRESENT: ${{ secrets.app_private_key != '' }}
     steps:
+      # Both halves of the App credential must be present. Supplying one alone
+      # is a configuration mistake that would otherwise degrade silently to the
+      # PAT or github.token and only surface as a refused tag push much later,
+      # on the rare release that touches a workflow file.
+      - name: Check App credential completeness
+        if: env.APP_ID_PRESENT != env.APP_KEY_PRESENT
+        run: |
+          echo '::error::app_id and app_private_key must be supplied together'
+          exit 1
+
+      - name: Mint installation token
+        id: app-token
+        if: env.APP_ID_PRESENT == 'true' && env.APP_KEY_PRESENT == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          token: ${{ secrets.git_token || github.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.git_token || github.token }}
           ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           fetch-depth: 0
 
