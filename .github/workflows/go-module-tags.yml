@@ -93,7 +93,7 @@ jobs:
           fetch-depth: 0
 
       - name: Tag and push Go modules
-        uses: sneat-co/cicd/actions/go-module-tags@main
+        uses: sneat-co/cicd/actions/go-module-tags@895303a5328e2804bf022755f8441620e460eca3
         with:
           modules: ${{ inputs.modules }}
           ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
