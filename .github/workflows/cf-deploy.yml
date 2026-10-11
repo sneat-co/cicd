@@ -78,6 +78,11 @@ on:
         type: string
         required: false
         default: ""
+      build-github-auth:
+        description: Expose this job's existing GitHub token to the build for online artifact verification
+        type: boolean
+        required: false
+        default: false
       extra-install-directory:
         description: >-
           Optional second directory to install deps in before building (e.g. the
@@ -241,6 +246,7 @@ jobs:
         env:
           PRIMEUI_LICENSE: ${{ secrets.PRIMEUI_LICENSE }}
           GOPRIVATE: ${{ inputs.goprivate }}
+          GH_TOKEN: ${{ inputs.build-github-auth && github.token || '' }}
         run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
