@@ -16,7 +16,8 @@ inputs:
   pnpm-version:
     description: >-
       Exact pnpm version. Ignored automatically when the repository-root
-      package.json declares a pnpm packageManager version.
+      or working-directory package.json declares a pnpm packageManager version
+      (root wins).
       Pinned to an exact version (not the "11" major tag) for reproducibility.
     required: false
     default: "11.20.0"
@@ -36,13 +37,7 @@ runs:
       id: pnpm
       shell: bash
       run: |
-        version="${{ inputs.pnpm-version }}"
-        if [[ -f package.json ]]; then
-          declared="$(node -p "const p=require('./package.json').packageManager || ''; p.startsWith('pnpm@') ? p.slice(5).split('+')[0] : ''")"
-          if [[ -n "$declared" ]]; then
-            version="$declared"
-          fi
-        fi
+        version="$("$GITHUB_ACTION_PATH/resolve-version.sh" "${{ inputs.pnpm-version }}" "${{ inputs.working-directory }}")"
         npm install --global "pnpm@$version"
         echo "Installed pnpm $(pnpm --version)"
         echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"

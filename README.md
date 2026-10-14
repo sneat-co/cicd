@@ -69,7 +69,7 @@ a few lines long and upgrades happen once.
 
 | Action | Purpose |
 |--------|---------|
-| `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. The install step sets `PNPM_CONFIG_PM_ON_FAIL=ignore` so nested installs of GitHub-pinned dependencies (which pin their own `packageManager`) do not fail trying to switch pnpm versions. Used by `nx-ci.yml`, `playwright-e2e.yml`, `playwright-artifact-e2e.yml` and `cf-deploy.yml`. |
+| `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. The pnpm version comes from `packageManager` in the root `package.json`, else the `working-directory` one, else the `pnpm-version` input. The install step sets `PNPM_CONFIG_PM_ON_FAIL=ignore` so nested installs of GitHub-pinned dependencies (which pin their own `packageManager`) do not fail trying to switch pnpm versions. Used by `nx-ci.yml`, `playwright-e2e.yml`, `playwright-artifact-e2e.yml` and `cf-deploy.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
 | `go-module-tags` | Validate `{dir, version}` pairs against each module's `go.mod`, then create and push idempotent annotated `<dir>/v<version>` tags. Used by `go-module-tags.yml`; standalone via `GO_MODULE_TAGS_MODULES=... GITHUB_REPOSITORY=... actions/go-module-tags/tag-modules.sh`. |
 

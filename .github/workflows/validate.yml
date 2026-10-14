@@ -31,6 +31,9 @@ jobs:
       - name: Run go-module-tags tests
         run: tests/test-go-module-tags.sh
 
+      - name: Run setup-pnpm-node version resolution tests
+        run: tests/test-setup-pnpm-node.sh
+
   go:
     name: Go CI
     uses: ./.github/workflows/go-ci.yml
