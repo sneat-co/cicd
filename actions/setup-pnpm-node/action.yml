@@ -16,7 +16,8 @@ inputs:
   pnpm-version:
     description: >-
       Exact pnpm version. Ignored automatically when the repository-root
-      package.json declares a pnpm packageManager version.
+      or working-directory package.json declares a pnpm packageManager version
+      (root wins).
       Pinned to an exact version (not the "11" major tag) for reproducibility.
     required: false
     default: "11.20.0"
@@ -36,13 +37,7 @@ runs:
       id: pnpm
       shell: bash
       run: |
-        version="${{ inputs.pnpm-version }}"
-        if [[ -f package.json ]]; then
-          declared="$(node -p "const p=require('./package.json').packageManager || ''; p.startsWith('pnpm@') ? p.slice(5).split('+')[0] : ''")"
-          if [[ -n "$declared" ]]; then
-            version="$declared"
-          fi
-        fi
+        version="$("$GITHUB_ACTION_PATH/resolve-version.sh" "${{ inputs.pnpm-version }}" "${{ inputs.working-directory }}")"
         npm install --global "pnpm@$version"
         echo "Installed pnpm $(pnpm --version)"
         echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
@@ -58,4 +53,13 @@ runs:
       if: ${{ inputs.install == 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      # Git-hosted dependencies (codeload tarballs of GitHub repos) are built
+      # by a nested `pnpm install` inside that dependency's own repo. Those
+      # repos pin their own `packageManager` (e.g. pnpm@11.20.0), and on a
+      # store cache miss the nested pnpm tries to switch to it and fails
+      # ("Failed to switch pnpm ... CLI is missing"). `ignore` only stops pnpm
+      # from switching/failing on a packageManager mismatch; the pnpm version
+      # used here is still the one this action installed above.
+      env:
+        PNPM_CONFIG_PM_ON_FAIL: ignore
       run: pnpm install --frozen-lockfile
