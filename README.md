@@ -251,3 +251,16 @@ other repositories in the organisation** so they can call these workflows/action
 gh api -X PUT repos/sneat-co/cicd/actions/permissions/access \
   -f access_level=organization
 ```
+
+### Private build artifact verification
+
+`cf-deploy.yml` optionally accepts `build-github-app-client-id`,
+`build-github-app-owner`, `build-github-app-repositories`, and the
+`BUILD_GITHUB_APP_PRIVATE_KEY` secret. Supply all four together. The workflow
+validates and normalizes the comma/newline repository list before minting a
+short-lived installation token restricted to those repositories with contents
+and attestations read permissions. The token is supplied as `GH_TOKEN` only to
+the Build step, for authenticated release downloads and provenance verification;
+the App installation must already allow both permissions. Publication and
+Cloudflare deployment credentials remain separate. With no App inputs, the
+existing `build-github-auth` behavior is unchanged.
