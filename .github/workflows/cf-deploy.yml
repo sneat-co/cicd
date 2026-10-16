@@ -83,6 +83,21 @@ on:
         type: boolean
         required: false
         default: false
+      build-github-app-client-id:
+        description: GitHub App client ID for repository-scoped private artifact verification during Build
+        type: string
+        required: false
+        default: ""
+      build-github-app-owner:
+        description: GitHub installation owner for private build artifacts
+        type: string
+        required: false
+        default: ""
+      build-github-app-repositories:
+        description: Comma-separated unqualified repositories granted contents and attestations read during Build
+        type: string
+        required: false
+        default: ""
       extra-install-directory:
         description: >-
           Optional second directory to install deps in before building (e.g. the
@@ -153,6 +168,9 @@ on:
         required: false
         default: 20
     secrets:
+      BUILD_GITHUB_APP_PRIVATE_KEY:
+        description: Optional App private key; required together with all build-github-app inputs
+        required: false
       CLOUDFLARE_API_TOKEN:
         required: true
       CLOUDFLARE_ACCOUNT_ID:
@@ -241,12 +259,60 @@ jobs:
           prefix="${prefix%/\*}"
           git config --global url."https://${GOPRIVATE_TOKEN}:x-oauth-basic@${prefix}".insteadOf "https://${prefix}"
 
+      - name: Validate build GitHub App configuration
+        id: build_app_config
+        if: ${{ inputs.build-github-app-client-id != '' || inputs.build-github-app-owner != '' || inputs.build-github-app-repositories != '' }}
+        shell: bash
+        env:
+          PRIVATE_GIT_APP_CLIENT_ID: ${{ inputs.build-github-app-client-id }}
+          PRIVATE_GIT_APP_OWNER: ${{ inputs.build-github-app-owner }}
+          PRIVATE_GIT_APP_REPOSITORIES: ${{ inputs.build-github-app-repositories }}
+          PRIVATE_GIT_APP_PRIVATE_KEY: ${{ secrets.BUILD_GITHUB_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PRIVATE_GIT_APP_CLIENT_ID" ] || [ -z "$PRIVATE_GIT_APP_PRIVATE_KEY" ] || [ -z "$PRIVATE_GIT_APP_OWNER" ] || [ -z "$PRIVATE_GIT_APP_REPOSITORIES" ]; then
+            echo "::error title=Incomplete GitHub App private-module configuration::client ID, private key, owner, and at least one repository are required together."
+            exit 1
+          fi
+          if ! [[ "$PRIVATE_GIT_APP_OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error title=Invalid GitHub App private-module owner::'$PRIVATE_GIT_APP_OWNER' is not a GitHub owner name."
+            exit 1
+          fi
+          repositories=()
+          while IFS= read -r raw_repository; do
+            repository="$(printf '%s' "$raw_repository" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [ -z "$repository" ] && continue
+            if ! [[ "$repository" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error title=Invalid GitHub App private-module repository::'$repository' must be an unqualified repository name."
+              exit 1
+            fi
+            repositories+=("$repository")
+          done < <(printf '%s\n' "$PRIVATE_GIT_APP_REPOSITORIES" | tr ',' '\n')
+          if [ "${#repositories[@]}" -eq 0 ]; then
+            echo "::error title=Missing GitHub App private-module repository::At least one syntactically valid repository is required before a token is minted."
+            exit 1
+          fi
+          normalized_repositories="$(IFS=,; printf '%s' "${repositories[*]}")"
+          echo "repositories=$normalized_repositories" >> "$GITHUB_OUTPUT"
+
+      - name: Mint repository-scoped build artifact token
+        id: build_app_token
+        if: ${{ inputs.build-github-app-client-id != '' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.build-github-app-client-id }}
+          private-key: ${{ secrets.BUILD_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.build-github-app-owner }}
+          repositories: ${{ steps.build_app_config.outputs.repositories }}
+          permission-contents: read
+          permission-attestations: read
+
       - name: Build
         working-directory: ${{ inputs.working-directory }}
         env:
           PRIMEUI_LICENSE: ${{ secrets.PRIMEUI_LICENSE }}
           GOPRIVATE: ${{ inputs.goprivate }}
-          GH_TOKEN: ${{ inputs.build-github-auth && github.token || '' }}
+          GH_TOKEN: ${{ steps.build_app_token.outputs.token || (inputs.build-github-auth && github.token || '') }}
         run: ${{ inputs.build-command || format('pnpm exec nx build {0}', inputs.build-target) }}
 
       - name: Deploy to Cloudflare
