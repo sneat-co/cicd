@@ -752,8 +752,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${SCHEDULER_JOB}" ] && [ -z "${CRON_SWEEP_SECRET}" ]; then
-            echo "::error::CRON_SWEEP_SECRET must be configured as a GitHub secret before deployment"
-            exit 1
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "[dry-run] CRON_SWEEP_SECRET is not set; a real deploy would stop here"
+            else
+              echo "::error::CRON_SWEEP_SECRET must be configured as a GitHub secret before deployment"
+              exit 1
+            fi
           fi
           INVOKER_SA="cloud-tasks-invoker@${GCLOUD_PROJECT_ID}.iam.gserviceaccount.com"
           image="${IMAGE:-${GCLOUD_REGION}-docker.pkg.dev/${GCLOUD_PROJECT_ID}/cloud-run/${SERVICE_NAME}}"

@@ -420,6 +420,10 @@ hasnt "$(calls)" "run deploy"
 reset; prep_deploy
 run_step "$D" "${deploy_env[@]}" CRON_SWEEP_SECRET=
 ok "no scheduler, no cron secret needed"
+reset; prep_deploy
+run_step "$D" "${deploy_env[@]}" CRON_SWEEP_SECRET= SCHEDULER_JOB=svc-cron DRY_RUN=true
+ok "a dry run does not need the cron secret"
+has "$OUT" "[dry-run] CRON_SWEEP_SECRET is not set; a real deploy would stop here"
 
 # The invoker grant is a warning with the exact command.
 reset; prep_deploy
