@@ -40,6 +40,7 @@ cat > "$fakebin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 d="${FAKE_DIR:?}"
 echo "gcloud $*" >> "$d/calls.log"
+[ -z "${ALL_SECRETS_JSON:-}" ] || echo "gcloud $*" >> "$d/env-leak.log"
 case "$1 $2 $3" in
   "secrets describe "*) [ -f "$d/secrets/$3" ] || exit 1 ;;
   "secrets create "*)
@@ -72,6 +73,12 @@ case "$1 $2 $3" in
     [ -z "${FAKE_FAIL_INVOKER:-}" ] || exit 1 ;;
   "scheduler jobs describe") [ -f "$d/scheduler/$4" ] || exit 1 ;;
   "scheduler jobs create") : > "$d/scheduler/$5" ;;
+  "scheduler jobs pause") [ -z "${FAKE_FAIL_PAUSE:-}" ] || exit 1 ;;
+  "scheduler jobs update")
+    case "$*" in *--update-headers=*) [ -z "${FAKE_FAIL_HEADER:-}" ] || exit 1 ;; esac ;;
+  "scheduler jobs delete")
+    [ -z "${FAKE_FAIL_DELETE:-}" ] || exit 1
+    rm -f "$d/scheduler/$4" ;;
 esac
 exit 0
 FAKE
@@ -140,7 +147,7 @@ cond() { yq -r ".jobs.deploy.steps[] | select(.name == \"$1\") | .if" "$workflow
 
 V="Validate deploy inputs"
 valid_env=(SCHEDULER_PATH=/v0/cron/sweep 'SCHEDULER_CRON=*/5 * * * *' SCHEDULER_CREATE_PAUSED=false
-  FIRESTORE_TTLS= MIN_INSTANCES=0 MAX_INSTANCES=2 VALIDATE_PATH=/cicd/validate
+  ALLOW_UNPREFIXED_SECRETS=false FIRESTORE_TTLS= MIN_INSTANCES=0 MAX_INSTANCES=2 VALIDATE_PATH=/cicd/validate
   CI_RUN_ID= CI_ARTIFACT_NAME= BINARY_NAME= WIF_PROVIDER=projects/1/locations/global/workloadIdentityPools/p/providers/q
   DEPLOYER_SA=d@test-proj.iam.gserviceaccount.com)
 
@@ -150,9 +157,19 @@ reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME=games-cloud SECRET_PREFIX=GA
   SCHEDULER_JOB=games-cron 'FIRESTORE_TTLS=sso-flows:expiresAt'; ok "full valid set"
 reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME=Bad_Name; bad "service name"
 reset; run_step "$V" "${valid_env[@]}" SECRET_PREFIX='bad prefix'; bad "secret prefix"
-reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="1BAD"; bad "secret name"
-reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A B A"; bad "duplicate owned"
-reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A B" SHARED_SECRETS="B"; bad "owned and shared overlap"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="1BAD" SECRET_PREFIX=P__; bad "secret name"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="lower_case" SECRET_PREFIX=P__; bad "lower-case owned name"
+has "$OUT" "must be an upper-case environment variable name"
+reset; run_step "$V" "${valid_env[@]}" SHARED_SECRETS="Mixed_Case"; bad "mixed-case shared name"
+reset; run_step "$V" "${valid_env[@]}" REQUIRED_SECRETS="a_b"; bad "lower-case required name"
+reset; run_step "$V" "${valid_env[@]}" ENV_FROM_SECRETS="a_b"; bad "lower-case env_from_secrets name"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A_ONE"; bad "owned secrets without a prefix"
+has "$OUT" "owned_secrets need a secret_prefix"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A_ONE" ALLOW_UNPREFIXED_SECRETS=true; ok "unprefixed owned secrets, confirmed"
+reset; run_step "$V" "${valid_env[@]}" SHARED_SECRETS="S_ONE"; ok "shared secrets alone need no prefix"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A_ONE" SECRET_PREFIX=P__ SHARED_SECRETS="P__A_ONE"; bad "prefixed owned name equals a shared name"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A B A" SECRET_PREFIX=P__; bad "duplicate owned"
+reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="A B" SHARED_SECRETS="B" SECRET_PREFIX=P__; bad "owned and shared overlap"
 reset; run_step "$V" "${valid_env[@]}" MIN_INSTANCES=3; bad "min above max"
 reset; run_step "$V" "${valid_env[@]}" MAX_INSTANCES=two; bad "non-numeric max"
 reset; run_step "$V" "${valid_env[@]}" VALIDATE_PATH=cicd; bad "validate path"
@@ -191,6 +208,16 @@ run_step "$S" OWNED_SECRETS="B" 'ALL_SECRETS_JSON={"B":"new"}'
 ok "changed value"
 has "$OUT" "· B: new version added"
 [ "$(cat "$fake/secrets/B")" = "new" ] || fail "changed value stored"
+
+# The secrets context is dropped before any gcloud call, and the owned value still arrives.
+reset
+run_step "$S" OWNED_SECRETS="A" 'ALL_SECRETS_JSON={"A":"a-val","CI_TOKEN":"ci-token-val"}'
+ok "context dropped"
+[ ! -s "$fake/env-leak.log" ] || fail "gcloud inherited the secrets context: $(cat "$fake/env-leak.log")"
+[ "$(cat "$fake/secrets/A")" = "a-val" ] || fail "owned value written"
+has "$OUT" "secrets context: "
+hasnt "$OUT" "ci-token-val"
+[ -z "$(ls "$rt" | grep -i values)" ] || true
 
 # A value is stored byte-exact, trailing newline included.
 reset
@@ -234,6 +261,12 @@ reset
 run_step "$S" OWNED_SECRETS="" 'ALL_SECRETS_JSON={"A":"a"}'
 ok "no owned secrets"
 hasnt "$(calls)" "secrets create"
+reset
+run_step "$S" OWNED_SECRETS="A" DRY_RUN=true 'ALL_SECRETS_JSON={"A":"a"}'
+ok "dry-run sync"
+has "$OUT" "· A: [dry-run] would create it if missing, compare with the latest version and add one only if it differs"
+hasnt "$OUT" "new version added"
+hasnt "$(calls)" "versions"
 reset
 run_step "$S" OWNED_SECRETS="A" 'ALL_SECRETS_JSON='
 ok "empty secrets context"
@@ -442,11 +475,54 @@ create="$(line_with 'scheduler jobs create http svc-cron')"
 has "$create" "--location=europe-west3 --project=test-proj --schedule=*/5 * * * * --time-zone=Etc/UTC --uri=https://svc-abc-ew.a.run.app/v0/cron/sweep --http-method=POST --attempt-deadline=300s --headers=X-Cron-Secret=cron-secret"
 [ "$(count_calls 'scheduler jobs pause')" = "0" ] || fail "an unpaused job is not paused"
 
+# Created paused: no header until the job is paused, so a tick in the window is rejected.
 reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
 run_step "$J" "${sched_env[@]}" SCHEDULER_CREATE_PAUSED=true
 ok "scheduler create paused"
-has "$(calls)" "scheduler jobs pause svc-cron --location=europe-west3 --project=test-proj"
+sched_calls="$(grep 'scheduler jobs' "$fake/calls.log")"
+[ "$(sed -n 1p <<< "$sched_calls")" = "gcloud scheduler jobs describe svc-cron --location=europe-west3 --project=test-proj" ] || fail "call 1 is describe"
+create="$(sed -n 2p <<< "$sched_calls")"
+has "$create" "scheduler jobs create http svc-cron --location=europe-west3 --project=test-proj --schedule=*/5 * * * * --time-zone=Etc/UTC --uri=https://svc-abc-ew.a.run.app/v0/cron/sweep --http-method=POST --attempt-deadline=300s"
+hasnt "$create" "headers"
+hasnt "$create" "cron-secret"
+[ "$(sed -n 3p <<< "$sched_calls")" = "gcloud scheduler jobs pause svc-cron --location=europe-west3 --project=test-proj" ] || fail "call 3 is pause"
+update="$(sed -n 4p <<< "$sched_calls")"
+has "$update" "scheduler jobs update http svc-cron --location=europe-west3 --project=test-proj --update-headers=X-Cron-Secret=cron-secret"
+[ "$(wc -l <<< "$sched_calls" | tr -d ' ')" = "4" ] || fail "exactly four scheduler calls"
 has "$OUT" "Created svc-cron paused"
+[ -f "$fake/scheduler/svc-cron" ] || fail "job kept"
+
+# If pausing fails the job is deleted before the step fails, so a re-run recreates it paused.
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" SCHEDULER_CREATE_PAUSED=true FAKE_FAIL_PAUSE=1
+bad "pause failure fails the step"
+has "$OUT" "could not be created paused; deleting it"
+sched_calls="$(grep 'scheduler jobs' "$fake/calls.log" | sed -E 's/ --.*//')"
+[ "$sched_calls" = "gcloud scheduler jobs describe svc-cron
+gcloud scheduler jobs create http svc-cron
+gcloud scheduler jobs pause svc-cron
+gcloud scheduler jobs delete svc-cron" ] || fail "order on pause failure: $sched_calls"
+hasnt "$(calls)" "update-headers"
+has "$(calls)" "scheduler jobs delete svc-cron --location=europe-west3 --project=test-proj --quiet"
+[ ! -f "$fake/scheduler/svc-cron" ] || fail "job deleted"
+
+# If the header update fails the job is deleted too.
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" SCHEDULER_CREATE_PAUSED=true FAKE_FAIL_HEADER=1
+bad "header failure fails the step"
+sched_calls="$(grep 'scheduler jobs' "$fake/calls.log" | sed -E 's/ --.*//')"
+[ "$sched_calls" = "gcloud scheduler jobs describe svc-cron
+gcloud scheduler jobs create http svc-cron
+gcloud scheduler jobs pause svc-cron
+gcloud scheduler jobs update http svc-cron
+gcloud scheduler jobs delete svc-cron" ] || fail "order on header failure: $sched_calls"
+[ ! -f "$fake/scheduler/svc-cron" ] || fail "job deleted after header failure"
+
+# If the delete fails too, the step still fails and says how to delete by hand.
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" SCHEDULER_CREATE_PAUSED=true FAKE_FAIL_PAUSE=1 FAKE_FAIL_DELETE=1
+bad "pause and delete failure"
+has "$OUT" "::warning::could not delete svc-cron; delete it by hand before re-running: gcloud scheduler jobs delete svc-cron --location=europe-west3 --project=test-proj"
 
 # An update never pauses or resumes, even when create-paused is set.
 reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"; : > "$fake/scheduler/svc-cron"
@@ -663,7 +739,8 @@ has "$plan" "gcloud scheduler jobs create http svc-cron"
 has "$plan" "gcloud scheduler jobs pause svc-cron"
 has "$plan" "gcloud firestore fields ttls update field --collection-group=grp"
 has "$plan" "--set-env-vars=<GOOGLE_CLOUD_PROJECT,FIREBASE_PROJECT_ID,CLOUD_TASKS_LOCATION,CLOUD_TASKS_INVOKER_SA,SNEAT_PLATFORM,PLAIN,SNEAT_TASKS_BASE_URL,CLOUD_TASKS_OIDC_AUDIENCE>"
-has "$plan" "--headers=<redacted>"
+has "$plan" "--update-headers=<redacted>"
+hasnt "$(grep 'scheduler jobs create' <<< "$plan")" "headers"
 for leaked in super-secret-a plain-secret-value cron-secret-value; do
   hasnt "$plan" "$leaked"
   hasnt "$(cat "$work/summary")" "$leaked"

@@ -144,6 +144,15 @@ on:
         type: string
         required: false
         default: ""
+      allow_unprefixed_secrets:
+        description: >-
+          Confirm that an empty secret_prefix is intended. A service that owns
+          secrets must set a prefix, so it cannot write into the shared
+          namespace by forgetting one; only sneat-go, the owner of the shared
+          secrets, sets this.
+        type: boolean
+        required: false
+        default: false
       owned_secrets:
         description: Whitespace-separated env-var names this service syncs and owns
         type: string
@@ -271,6 +280,7 @@ jobs:
           SCHEDULER_PATH: ${{ inputs.scheduler_path }}
           SCHEDULER_CRON: ${{ inputs.scheduler_cron }}
           SCHEDULER_CREATE_PAUSED: ${{ inputs.scheduler_create_paused }}
+          ALLOW_UNPREFIXED_SECRETS: ${{ inputs.allow_unprefixed_secrets }}
           FIRESTORE_TTLS: ${{ inputs.firestore_ttls }}
           MIN_INSTANCES: ${{ inputs.min_instances }}
           MAX_INSTANCES: ${{ inputs.max_instances }}
@@ -297,7 +307,9 @@ jobs:
           check_names() {
             local label="$1" list="$2" name seen=" "
             for name in $(printf '%s' "$list" | tr ',' ' '); do
-              [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "${label}: '${name}' is not an environment variable name"
+              # Upper case only: the secrets context ignores case but the lookup
+              # below does not, so a lower-case name would be skipped silently.
+              [[ "$name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || fail "${label}: '${name}' must be an upper-case environment variable name"
               case "$seen" in *" ${name} "*) fail "${label}: '${name}' is listed twice" ;; esac
               seen="${seen}${name} "
             done
@@ -308,9 +320,12 @@ jobs:
           check_names env_from_secrets "$ENV_FROM_SECRETS"
           for name in $(printf '%s' "$OWNED_SECRETS" | tr ',' ' '); do
             case " $(printf '%s' "$SHARED_SECRETS" | tr ',' ' ') " in
-              *" ${name} "*) fail "'${name}' is both an owned and a shared secret" ;;
+              *" ${name} "*|*" ${SECRET_PREFIX}${name} "*) fail "'${name}' is both an owned and a shared secret" ;;
             esac
           done
+          if [ -n "$(printf '%s' "$OWNED_SECRETS" | tr -d ', \n\t')" ] && [ -z "$SECRET_PREFIX" ] && [ "$ALLOW_UNPREFIXED_SECRETS" != "true" ]; then
+            fail "owned_secrets need a secret_prefix, or allow_unprefixed_secrets: true to confirm they belong in the shared namespace"
+          fi
 
           [[ "$MIN_INSTANCES" =~ ^[0-9]+$ ]] || fail "min_instances must be a whole number"
           [[ "$MAX_INSTANCES" =~ ^[0-9]+$ ]] || fail "max_instances must be a whole number"
@@ -542,6 +557,22 @@ jobs:
         env:
           ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
+          # Read the owned values out of the secrets context into private files,
+          # then drop the context, so no secret this service does not own (for
+          # example the CI token) reaches a gcloud child process.
+          all_secrets_json="${ALL_SECRETS_JSON:-}"
+          [ -n "$all_secrets_json" ] || all_secrets_json='{}'
+          echo "secrets context: ${#all_secrets_json} bytes (an environment string is capped at 131072)"
+          values_dir="$(mktemp -d)"
+          chmod 700 "$values_dir"
+          trap 'rm -rf "$values_dir"' EXIT
+          for name in $(printf '%s' "${OWNED_SECRETS}" | tr ',' ' '); do
+            # Keep the value byte-exact, trailing newlines included: the trailing
+            # "x" stops command substitution from stripping them.
+            value="$(jq -j --arg k "$name" '.[$k] // ""' <<< "$all_secrets_json"; printf x)"
+            printf '%s' "${value%x}" > "$values_dir/$name"
+          done
+          unset ALL_SECRETS_JSON all_secrets_json value
           project="${GCLOUD_PROJECT_ID}"
           # Cloud Run's runtime service account must be able to READ each bound
           # secret. Existing secrets already grant it; a freshly created one does
@@ -555,20 +586,20 @@ jobs:
             project_number="$(gcloud projects describe "$project" --format='value(projectNumber)')"
             runtime_sa="${project_number}-compute@developer.gserviceaccount.com"
           fi
-          all_secrets_json="${ALL_SECRETS_JSON:-}"
-          [ -n "$all_secrets_json" ] || all_secrets_json='{}'
           sync_secret() {
             local name="$1"
             local sm="${SECRET_PREFIX}${name}"
             local label="${name}"
             [ -z "${SECRET_PREFIX}" ] || label="${name} (${sm})"
             local value
-            # Keep the value byte-exact, trailing newlines included: the trailing
-            # "x" stops command substitution from stripping them.
-            value="$(jq -j --arg k "$name" '.[$k] // ""' <<< "$all_secrets_json"; printf x)"
+            value="$(cat "$values_dir/$name"; printf x)"
             value="${value%x}"
             if [ -z "$value" ]; then
               echo "· ${label}: no GitHub secret set — leaving Secret Manager untouched"
+              return 0
+            fi
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "· ${label}: [dry-run] would create it if missing, compare with the latest version and add one only if it differs"
               return 0
             fi
             if ! gcloud secrets describe "$sm" --project="$project" >/dev/null 2>&1; then
@@ -616,6 +647,7 @@ jobs:
           chmod 600 "$out"
           all_secrets_json="${ALL_SECRETS_JSON:-}"
           [ -n "$all_secrets_json" ] || all_secrets_json='{}'
+          unset ALL_SECRETS_JSON
           for name in $(printf '%s' "${ENV_FROM_SECRETS}" | tr ',' ' '); do
             value="$(jq -j --arg k "$name" '.[$k] // ""' <<< "$all_secrets_json"; printf x)"
             value="${value%x}"
@@ -898,14 +930,30 @@ jobs:
           if gcloud scheduler jobs describe "${CRON_JOB}" --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
               --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+          elif [ "${SCHEDULER_CREATE_PAUSED}" = "true" ]; then
+            # Cloud Scheduler cannot create a job paused, so the job is created
+            # WITHOUT its X-Cron-Secret header (the sweep rejects a tick that
+            # lacks it), paused, and only then given the header. If pausing or
+            # the header update fails the job is deleted, so a re-run recreates
+            # it paused instead of leaving a running job that the update path
+            # would never pause.
+            discard_job() {
+              echo "::error::${CRON_JOB} could not be created paused; deleting it so the next run recreates it paused"
+              gcloud scheduler jobs delete "${CRON_JOB}" \
+                --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --quiet || \
+                echo "::warning::could not delete ${CRON_JOB}; delete it by hand before re-running: gcloud scheduler jobs delete ${CRON_JOB} --location=${GCLOUD_REGION} --project=${GCLOUD_PROJECT_ID}"
+              exit 1
+            }
+            gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}"
+            gcloud scheduler jobs pause "${CRON_JOB}" \
+              --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" || discard_job
+            gcloud scheduler jobs update http "${CRON_JOB}" \
+              --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \
+              --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}" || discard_job
+            echo "Created ${CRON_JOB} paused; later deploys leave its state alone"
           else
             gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}" \
               --headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
-            if [ "${SCHEDULER_CREATE_PAUSED}" = "true" ]; then
-              gcloud scheduler jobs pause "${CRON_JOB}" \
-                --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}"
-              echo "Created ${CRON_JOB} paused; later deploys leave its state alone"
-            fi
           fi
 
       # Application expiry rejects these records immediately; Firestore TTL

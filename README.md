@@ -95,6 +95,11 @@ that another service owns:
 - A **shared** secret `X` is bound as `X=X:latest` and is never written.
 - Both kinds are bound only when the Secret Manager secret exists.
   `required_secrets` lists names that must be bound, or the deploy stops first.
+- A service that owns secrets must set `secret_prefix`; an empty prefix needs
+  `allow_unprefixed_secrets: true` (sneat-go, the owner of the shared secrets).
+  Secret lists take upper-case names only.
+- The sync reads the owned values out of the secrets context and drops it before
+  any `gcloud` call, so other inherited secrets never reach a child process.
 - `env_from_secrets` names GitHub secrets that become plain environment values
   (keys that are not credentials); never use it for a credential.
 - The runtime service account must already hold `secretAccessor` on every bound
@@ -107,8 +112,10 @@ and `CLOUD_TASKS_OIDC_AUDIENCE` to the service's own URL (patching them in after
 the first-ever deploy), and grants `roles/run.invoker` on the service to the
 Cloud Tasks invoker account. `scheduler_job` creates or updates one Scheduler
 job authenticated with the GitHub secret `CRON_SWEEP_SECRET`; with
-`scheduler_create_paused` the job is paused only in the run that creates it, and
-an update never changes a job's paused or running state.
+`scheduler_create_paused` the job is created without its `X-Cron-Secret` header
+(so a tick before the pause is rejected), paused, and only then given the header;
+if either step fails the job is deleted so a re-run recreates it paused. An
+update never changes a job's paused or running state.
 
 `dry_run: true` replaces `gcloud` and `docker` with shims that print the
 planned commands (environment and header values redacted) into the job summary.
