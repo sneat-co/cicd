@@ -61,6 +61,7 @@ a few lines long and upgrades happen once.
 | `nx-ci.yml` | `pnpm install` + `nx run-many -t <targets>` | `working-directory` (default `frontend`), `targets` (default `lint test build`), `node-version`, `pnpm-version`, `peer-range-strict` (default `false`; gates bare `^0.0.x` peer ranges on `@sneat/*` packages when `true`) |
 | `playwright-e2e.yml` | Playwright e2e for an Nx app (with browser cache) | `working-directory`, `e2e-project-directory` (required), `project` (default `chromium`) |
 | `cf-deploy.yml` | Build a project (Astro landing, Nx app, or landing + assembled root-mounted app) and deploy to Cloudflare (Workers static assets) via wrangler | `working-directory` (default `frontend`), `build-command` (e.g. `pnpm build`; falls back to `pnpm exec nx build <build-target>` when empty), `build-target` (Nx fallback), `extra-install-directory` (second workspace to `pnpm install`, e.g. `.` or `frontend` for assembled apps), `cloudflare-account-id` (pass `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`), `wrangler-config` (default `wrangler.jsonc`), `smoke-command` (optional post-deploy smoke), `setup-tinygo` (default `false`, installs TinyGo before the build for callers compiling Go to wasm), `tinygo-version` (default `0.41.1`); secret `CLOUDFLARE_API_TOKEN` |
+| `cloudrun-deploy.yml` | Sync a service's owned secrets from GitHub to Secret Manager, build and push its image, deploy it to Cloud Run, create or update its Scheduler job and Firestore TTLs, then check `/health-check` and the validation endpoint. See [Cloud Run deploy](#cloud-run-deploy-cloudrun-deployyml) | `service`, `wif_provider`, `deployer_sa` (required); `region` (default `europe-west3`), `project` (default `sneat-eur3-1`), `secret_prefix`, `owned_secrets`, `shared_secrets`, `required_secrets`, `env_vars`, `env_from_secrets`, `scheduler_job` (+ `scheduler_create_paused`, `scheduler_path`, `scheduler_cron`), `firestore_ttls`, `min_instances`/`max_instances`, `validate_path`, `runtime_sa`, `dry_run`; call with `secrets: inherit` |
 | `deps-policy.yml` | Gate a Go module against the fleet's dependency and layering policy (`policy/sneat-backend.yaml`). Lexical scan of import blocks and `go.mod` — **no credentials, no module downloads**, so it still reports when the build cannot start | `working-directory` (default `backend`), `policy` (override the document), `policy-ref` (ref of this repo the default policy is read from, default `main`), `wb-version` (default `v0.37.0`, the release that introduced the command; pinned rather than `latest`), `strict` (default `false`; only ever tightens) |
 | `go-storage-driver-boundary.yml` | Focused adoption gate that uses the same WB dependency classification but fails only centrally enforcing `storage-driver` imports. It requires a declared repository type and fails closed on unusable policy/configuration, malformed reports, or unparseable Go files. Other policy findings remain visible and outside this focused check; use `deps-policy.yml` for the complete verdict | `working-directory` (default `backend`), `policy`, `policy-ref` (default `main`), `wb-version` (default WB CLI v0.37.0) |
 | `go-module-tags.yml` | Create and push idempotent, validated annotated Git tags (`<module-dir>/v<version>`) for one or more Go modules in subdirectories of the calling repository. The caller passes explicit `{dir, version}` pairs (e.g. from its own consumed Nx release version plans) — this workflow never guesses versions or scans for changes. Fails loudly on a `go.mod` module-path mismatch and refuses to move an existing tag onto a different commit; requires `permissions: contents: write` in the caller | `modules` (required JSON array of `{"dir", "version"}` pairs), `ref` (optional commit SHA, default `github.sha`) |
@@ -72,6 +73,48 @@ a few lines long and upgrades happen once.
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. The pnpm version comes from `packageManager` in the root `package.json`, else the `working-directory` one, else the `pnpm-version` input. The install step sets `PNPM_CONFIG_PM_ON_FAIL=ignore` so nested installs of GitHub-pinned dependencies (which pin their own `packageManager`) do not fail trying to switch pnpm versions. Used by `nx-ci.yml`, `playwright-e2e.yml`, `playwright-artifact-e2e.yml` and `cf-deploy.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
 | `go-module-tags` | Validate `{dir, version}` pairs against each module's `go.mod`, then create and push idempotent annotated `<dir>/v<version>` tags. Used by `go-module-tags.yml`; standalone via `GO_MODULE_TAGS_MODULES=... GITHUB_REPOSITORY=... actions/go-module-tags/tag-modules.sh`. |
+
+## Cloud Run deploy (`cloudrun-deploy.yml`)
+
+One deploy for every Cloud Run service, extracted from sneat-go's
+`deploy-cloudrun.yml`. A caller names the service, how to authenticate and which
+secrets it owns or borrows; the workflow does the rest and prints a
+`Deployed revision: service=… revision=… commit=… url=…` line that ties the
+running revision to its commit. Callers must use `secrets: inherit`, because
+owned secrets are looked up by name at run time, and must grant
+`id-token: write` (plus `actions: read` to deploy a CI-run artifact).
+
+Secrets are namespaced per service, so a new service can never rotate a secret
+that another service owns:
+
+- An **owned** secret `X` is synced from the GitHub secret `X` to Secret Manager
+  as `<secret_prefix>X` and bound as `X=<secret_prefix>X:latest`. The sync
+  creates a missing secret (granting the runtime account `secretAccessor`), adds
+  a version only when the value changed, and leaves Secret Manager alone when the
+  GitHub secret is unset.
+- A **shared** secret `X` is bound as `X=X:latest` and is never written.
+- Both kinds are bound only when the Secret Manager secret exists.
+  `required_secrets` lists names that must be bound, or the deploy stops first.
+- `env_from_secrets` names GitHub secrets that become plain environment values
+  (keys that are not credentials); never use it for a credential.
+- The runtime service account must already hold `secretAccessor` on every bound
+  secret. The workflow checks this and fails with the exact
+  `gcloud secrets add-iam-policy-binding` commands; it never grants it.
+
+The workflow always sets `GOOGLE_CLOUD_PROJECT`, `FIREBASE_PROJECT_ID`,
+`CLOUD_TASKS_LOCATION` and `CLOUD_TASKS_INVOKER_SA`, sets `SNEAT_TASKS_BASE_URL`
+and `CLOUD_TASKS_OIDC_AUDIENCE` to the service's own URL (patching them in after
+the first-ever deploy), and grants `roles/run.invoker` on the service to the
+Cloud Tasks invoker account. `scheduler_job` creates or updates one Scheduler
+job authenticated with the GitHub secret `CRON_SWEEP_SECRET`; with
+`scheduler_create_paused` the job is paused only in the run that creates it, and
+an update never changes a job's paused or running state.
+
+`dry_run: true` replaces `gcloud` and `docker` with shims that print the
+planned commands (environment and header values redacted) into the job summary.
+The `Validate shared CI/CD` workflow runs it as a self-test, and
+`tests/test-cloudrun-deploy.sh` runs every step's script against a fake gcloud.
+`tests/fixtures/sneat-go-deploy/` holds sneat-go's secret lists as they are today.
 
 ## Dependency policy (`policy/`)
 

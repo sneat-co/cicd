@@ -34,8 +34,39 @@ jobs:
       - name: Run setup-pnpm-node version resolution tests
         run: tests/test-setup-pnpm-node.sh
 
+      - name: Run cloudrun-deploy workflow tests
+        run: tests/test-cloudrun-deploy.sh
+
   go:
     name: Go CI
     uses: ./.github/workflows/go-ci.yml
     with:
       working-directory: .
+
+  # Runs the reusable Cloud Run deploy end to end with gcloud and docker
+  # replaced by printing shims: nothing is authenticated, built, pushed or
+  # deployed, and the job fails if the plan holds no `gcloud run deploy`.
+  cloudrun-deploy-dry-run:
+    name: Cloud Run deploy dry run
+    uses: ./.github/workflows/cloudrun-deploy.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    secrets: inherit
+    with:
+      dry_run: true
+      service: selftest-service
+      wif_provider: projects/000000000000/locations/global/workloadIdentityPools/selftest/providers/selftest
+      deployer_sa: selftest@selftest-project.iam.gserviceaccount.com
+      secret_prefix: SELFTEST__
+      owned_secrets: SELFTEST_OWNED_TOKEN
+      shared_secrets: SELFTEST_SHARED_TOKEN
+      required_secrets: SELFTEST_OWNED_TOKEN SELFTEST_SHARED_TOKEN
+      env_vars: |
+        SNEAT_PLATFORM=cloudrun
+      env_from_secrets: SELFTEST_PLAIN_VALUE
+      scheduler_job: selftest-cron-sweep
+      scheduler_create_paused: true
+      firestore_ttls: |
+        selftestCollection:expiresAt

@@ -1,0 +1,1029 @@
+name: Cloud Run Deploy (reusable)
+
+# Reusable workflow: sync a service's secrets from GitHub to Secret Manager,
+# build and push its image, deploy it to Cloud Run, configure its Scheduler job
+# and Firestore TTLs, and verify the deployed revision. Extracted from sneat-go
+# `.github/workflows/deploy-cloudrun.yml` (task-8 of the product-cloud-runtimes
+# plan); with the sneat-go inputs it behaves the way that workflow did.
+#
+# Call it from a consumer repo. `secrets: inherit` is REQUIRED: owned secrets are
+# looked up by name at run time, so the workflow cannot declare them up front.
+#
+#   jobs:
+#     deploy:
+#       uses: sneat-co/cicd/.github/workflows/cloudrun-deploy.yml@main
+#       permissions:
+#         contents: read
+#         actions: read      # only to download a CI-run artifact (ci_run_id)
+#         id-token: write
+#       secrets: inherit
+#       with:
+#         service: games-cloud
+#         wif_provider: projects/588648831063/locations/global/workloadIdentityPools/github/providers/sneat-co
+#         deployer_sa: deployer-to-gae@sneat-eur3-1.iam.gserviceaccount.com
+#         runtime_sa: 588648831063-compute@developer.gserviceaccount.com
+#         secret_prefix: GAMES_CLOUD__
+#         owned_secrets: TELEGRAM_BOT_TOKEN_SNEATGAMESBOT
+#         shared_secrets: TELEGRAM_WEBHOOK_SECRET CICD_VALIDATE_TOKEN
+#         env_vars: |
+#           SNEAT_PLATFORM=cloudrun
+#
+# Secrets. An owned secret X is synced from the GitHub secret X to Secret Manager
+# under `${secret_prefix}X` and bound as `X=${secret_prefix}X:latest`. A shared
+# secret X is bound as `X=X:latest` and is never synced, so a service that only
+# borrows a secret can never rotate it for its owner. Every secret is bound only
+# when it exists in Secret Manager, so deploys do not break before an owner
+# creates an optional one; `required_secrets` names the ones that must exist.
+#
+# The GitHub secrets CRON_SWEEP_SECRET (when `scheduler_job` is set) and
+# CICD_VALIDATE_TOKEN (post-deploy validation) are read by name from the calling
+# repository, as are SNEAT_RELEASER_PRIVATE_KEY and SNEAT_CI_READWRITE_TOKEN
+# (only with `private_go_dependencies` / a source build).
+#
+# IAM is never changed here, apart from the existing grants on resources this
+# workflow itself creates. The runtime service account must already have
+# roles/secretmanager.secretAccessor on every bound secret; the workflow checks
+# that and fails with the exact `gcloud` command for someone with IAM rights.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Cloud Run service name
+        type: string
+        required: true
+      region:
+        description: Cloud Run, Scheduler and Artifact Registry region
+        type: string
+        required: false
+        default: europe-west3
+      project:
+        description: Google Cloud project id
+        type: string
+        required: false
+        default: sneat-eur3-1
+      image:
+        description: >-
+          Image repository without a tag. Empty means
+          `<region>-docker.pkg.dev/<project>/cloud-run/<service>`. The image is
+          pushed as `:<ref>` and `:latest` and the `:<ref>` tag is deployed.
+        type: string
+        required: false
+        default: ""
+      go_build_cmd:
+        description: >-
+          Shell command that builds the service binary from source before the
+          image build (run from the repository root; `$DEPLOY_SHA` is set).
+          Empty means the Dockerfile needs no host build. Ignored when
+          `ci_run_id` is set, because the validated CI binary is used instead.
+        type: string
+        required: false
+        default: ""
+      goprivate:
+        description: GOPRIVATE for go_build_cmd (comma-separated module prefixes)
+        type: string
+        required: false
+        default: ""
+      private_go_dependencies:
+        description: >-
+          Mint the SneatReleaser App token and configure process-only Git
+          credentials for private Go modules before the build. Uses the
+          SNEAT_RELEASER_PRIVATE_KEY and SNEAT_CI_READWRITE_TOKEN secrets.
+        type: boolean
+        required: false
+        default: false
+      ref:
+        description: >-
+          Commit to check out, build and deploy. Empty means `github.sha`. A
+          workflow_run caller passes the head SHA of the CI run it follows.
+        type: string
+        required: false
+        default: ""
+      ci_run_id:
+        description: >-
+          Run id of the successful CI run whose validated binary is deployed
+          instead of building from source. Requires a workflow_run caller (the
+          source checks read github.event.workflow_run), ci_artifact_name and
+          binary_name. Empty means build from source with go_build_cmd.
+        type: string
+        required: false
+        default: ""
+      ci_artifact_name:
+        description: Name of the CI artifact holding the binary, its .source-sha and its .sha256
+        type: string
+        required: false
+        default: ""
+      binary_name:
+        description: File name of the binary inside the CI artifact, installed as ./<binary_name>
+        type: string
+        required: false
+        default: ""
+      env_vars:
+        description: >-
+          Plain environment variables, one `K=V` per line (blank lines and `#`
+          comments are ignored). Values must not contain a comma. The workflow
+          also sets GOOGLE_CLOUD_PROJECT, FIREBASE_PROJECT_ID,
+          CLOUD_TASKS_LOCATION and CLOUD_TASKS_INVOKER_SA first, so a line
+          here may override them, and sets SNEAT_TASKS_BASE_URL and
+          CLOUD_TASKS_OIDC_AUDIENCE to the service URL last, so a line here
+          cannot.
+        type: string
+        required: false
+        default: ""
+      env_from_secrets:
+        description: >-
+          Whitespace-separated GitHub secret names whose values are set as
+          PLAIN environment variables of the same name (never as Secret Manager
+          bindings). For values that are keys, not credentials, such as an HMAC
+          key for a casual game. An unset secret yields an empty value.
+        type: string
+        required: false
+        default: ""
+      secret_prefix:
+        description: Prefix of the Secret Manager name of every owned secret, for example GAMES_CLOUD__. Empty for sneat-go.
+        type: string
+        required: false
+        default: ""
+      owned_secrets:
+        description: Whitespace-separated env-var names this service syncs and owns
+        type: string
+        required: false
+        default: ""
+      shared_secrets:
+        description: Whitespace-separated env-var names bound read-only as X=X:latest and never synced
+        type: string
+        required: false
+        default: ""
+      required_secrets:
+        description: >-
+          Whitespace-separated env-var names that must be bound (their Secret
+          Manager secret must exist) or the deploy fails before it starts.
+        type: string
+        required: false
+        default: ""
+      scheduler_job:
+        description: Cloud Scheduler job name. Empty means no Scheduler job.
+        type: string
+        required: false
+        default: ""
+      scheduler_create_paused:
+        description: Pause the Scheduler job in the run that creates it. Later runs never change its state.
+        type: boolean
+        required: false
+        default: false
+      scheduler_path:
+        description: Path the Scheduler job POSTs to
+        type: string
+        required: false
+        default: /v0/cron/sweep
+      scheduler_cron:
+        description: Cron schedule (UTC) of the Scheduler job
+        type: string
+        required: false
+        default: "*/5 * * * *"
+      firestore_ttls:
+        description: Firestore TTL policies, one `collectionGroup:field` per line. Empty means none.
+        type: string
+        required: false
+        default: ""
+      min_instances:
+        description: Minimum Cloud Run instances
+        type: number
+        required: false
+        default: 0
+      max_instances:
+        description: Maximum Cloud Run instances
+        type: number
+        required: false
+        default: 2
+      validate_path:
+        description: Path of the post-deploy validation endpoint, called with X-Cicd-Token
+        type: string
+        required: false
+        default: /cicd/validate
+      health_check_expect:
+        description: Text /health-check must contain. Empty skips the body check.
+        type: string
+        required: false
+        default: "Firestore write: OK"
+      wif_provider:
+        description: Workload identity provider resource name
+        type: string
+        required: true
+      deployer_sa:
+        description: Service account email the workflow impersonates to deploy
+        type: string
+        required: true
+      runtime_sa:
+        description: >-
+          Runtime service account email. Needs secretAccessor on every bound
+          secret; the workflow checks it and never grants it, apart from the
+          grant on a secret it creates. Empty means the project's default
+          compute account, and the deploy then passes no --service-account.
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: Print the planned gcloud and docker commands without running them
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      service_url:
+        description: URL of the deployed service
+        value: ${{ jobs.deploy.outputs.service_url }}
+      revision:
+        description: Name of the latest ready revision
+        value: ${{ jobs.deploy.outputs.revision }}
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    outputs:
+      service_url: ${{ steps.url.outputs.service_url }}
+      revision: ${{ steps.url.outputs.revision }}
+
+    env:
+      GCLOUD_PROJECT_ID: ${{ inputs.project }}
+      GCLOUD_REGION: ${{ inputs.region }}
+      SERVICE_NAME: ${{ inputs.service }}
+      # For a workflow_run caller, deploy exactly the commit whose CI succeeded.
+      DEPLOY_SHA: ${{ inputs.ref || github.sha }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      SECRET_PREFIX: ${{ inputs.secret_prefix }}
+      OWNED_SECRETS: ${{ inputs.owned_secrets }}
+      SHARED_SECRETS: ${{ inputs.shared_secrets }}
+      REQUIRED_SECRETS: ${{ inputs.required_secrets }}
+      ENV_FROM_SECRETS: ${{ inputs.env_from_secrets }}
+      RUNTIME_SA: ${{ inputs.runtime_sa }}
+      SCHEDULER_JOB: ${{ inputs.scheduler_job }}
+
+    permissions:
+      contents: 'read'
+      # Required to download an artifact from the completed CI workflow.
+      actions: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Validate deploy inputs
+        env:
+          SCHEDULER_PATH: ${{ inputs.scheduler_path }}
+          SCHEDULER_CRON: ${{ inputs.scheduler_cron }}
+          SCHEDULER_CREATE_PAUSED: ${{ inputs.scheduler_create_paused }}
+          FIRESTORE_TTLS: ${{ inputs.firestore_ttls }}
+          MIN_INSTANCES: ${{ inputs.min_instances }}
+          MAX_INSTANCES: ${{ inputs.max_instances }}
+          VALIDATE_PATH: ${{ inputs.validate_path }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_ARTIFACT_NAME: ${{ inputs.ci_artifact_name }}
+          BINARY_NAME: ${{ inputs.binary_name }}
+          WIF_PROVIDER: ${{ inputs.wif_provider }}
+          DEPLOYER_SA: ${{ inputs.deployer_sa }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$SERVICE_NAME" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || fail "service must be a Cloud Run service name"
+          [[ "$GCLOUD_PROJECT_ID" =~ ^[a-z][-a-z0-9]{4,28}[a-z0-9]$ ]] || fail "project must be a Google Cloud project id"
+          [[ "$GCLOUD_REGION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]] || fail "region must look like europe-west3"
+          [[ "$SECRET_PREFIX" =~ ^[A-Za-z0-9_-]*$ ]] || fail "secret_prefix may only contain letters, digits, '_' and '-'"
+          [[ "$DEPLOY_SHA" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "ref must be a commit SHA or a tag-like name"
+          [ -n "$WIF_PROVIDER" ] || fail "wif_provider is required"
+          [ -n "$DEPLOYER_SA" ] || fail "deployer_sa is required"
+          if [ -n "$RUNTIME_SA" ]; then
+            [[ "$RUNTIME_SA" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || fail "runtime_sa must be a service account email"
+          fi
+
+          check_names() {
+            local label="$1" list="$2" name seen=" "
+            for name in $(printf '%s' "$list" | tr ',' ' '); do
+              [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "${label}: '${name}' is not an environment variable name"
+              case "$seen" in *" ${name} "*) fail "${label}: '${name}' is listed twice" ;; esac
+              seen="${seen}${name} "
+            done
+          }
+          check_names owned_secrets "$OWNED_SECRETS"
+          check_names shared_secrets "$SHARED_SECRETS"
+          check_names required_secrets "$REQUIRED_SECRETS"
+          check_names env_from_secrets "$ENV_FROM_SECRETS"
+          for name in $(printf '%s' "$OWNED_SECRETS" | tr ',' ' '); do
+            case " $(printf '%s' "$SHARED_SECRETS" | tr ',' ' ') " in
+              *" ${name} "*) fail "'${name}' is both an owned and a shared secret" ;;
+            esac
+          done
+
+          [[ "$MIN_INSTANCES" =~ ^[0-9]+$ ]] || fail "min_instances must be a whole number"
+          [[ "$MAX_INSTANCES" =~ ^[0-9]+$ ]] || fail "max_instances must be a whole number"
+          [ "$MIN_INSTANCES" -le "$MAX_INSTANCES" ] || fail "min_instances must not exceed max_instances"
+          [[ "$VALIDATE_PATH" == /* ]] || fail "validate_path must start with '/'"
+
+          if [ -n "$SCHEDULER_JOB" ]; then
+            [[ "$SCHEDULER_JOB" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || fail "scheduler_job must be a Scheduler job name"
+            [[ "$SCHEDULER_PATH" == /* ]] || fail "scheduler_path must start with '/'"
+            [ -n "$SCHEDULER_CRON" ] || fail "scheduler_cron is required with scheduler_job"
+          elif [ "$SCHEDULER_CREATE_PAUSED" = "true" ]; then
+            fail "scheduler_create_paused needs scheduler_job"
+          fi
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            [[ "$line" =~ ^[A-Za-z0-9_-]+:[A-Za-z0-9_.-]+$ ]] || fail "firestore_ttls: '${line}' is not collectionGroup:field"
+          done <<< "$FIRESTORE_TTLS"
+
+          if [ -n "$CI_RUN_ID" ]; then
+            [[ "$CI_RUN_ID" =~ ^[0-9]+$ ]] || fail "ci_run_id must be a numeric run id"
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "ref must be a full commit SHA when ci_run_id is set"
+            [ -n "$CI_ARTIFACT_NAME" ] || fail "ci_artifact_name is required with ci_run_id"
+            [[ "$BINARY_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || fail "binary_name is required with ci_run_id"
+          fi
+
+      - name: Checkout commit to deploy
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - name: Verify canonical CI artifact source
+        if: inputs.ci_run_id != ''
+        env:
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_EVENT" = push
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$SOURCE_BRANCH" = main
+          test "$SOURCE_CONCLUSION" = success
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+
+      # Download by workflow run ID, never by a mutable release tag or a
+      # cross-run "latest" lookup. A source build (no ci_run_id) has no CI-run
+      # artifact and builds from its checked-out source instead.
+      - name: Download validated binary
+        if: inputs.ci_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.ci_artifact_name }}
+          path: ${{ runner.temp }}/validated-${{ inputs.binary_name }}-${{ inputs.ci_run_id }}
+          run-id: ${{ inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+
+      # Never extract a cross-run artifact into the checkout: it could replace a
+      # local credential action. Promote only the verified binary.
+      - name: Verify validated binary
+        if: inputs.ci_run_id != ''
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/validated-${{ inputs.binary_name }}-${{ inputs.ci_run_id }}
+          BINARY_NAME: ${{ inputs.binary_name }}
+        run: |
+          set -euo pipefail
+          for file in "$BINARY_NAME" "$BINARY_NAME.source-sha" "$BINARY_NAME.sha256"; do
+            test -f "$ARTIFACT_DIR/$file"
+            test ! -L "$ARTIFACT_DIR/$file"
+          done
+          test "$(cat "$ARTIFACT_DIR/$BINARY_NAME.source-sha")" = "$DEPLOY_SHA"
+          checksum="$(cat "$ARTIFACT_DIR/$BINARY_NAME.sha256")"
+          # Do not execute an artifact-controlled checksum file as a list of
+          # arbitrary paths. It may describe exactly this one binary only.
+          [[ "$checksum" =~ ^([0-9a-f]{64})[[:blank:]]+\*?"$BINARY_NAME"$ ]]
+          expected="${BASH_REMATCH[1]}"
+          actual="$(sha256sum "$ARTIFACT_DIR/$BINARY_NAME")"
+          test "${actual%% *}" = "$expected"
+          install -m 0755 "$ARTIFACT_DIR/$BINARY_NAME" "./$BINARY_NAME"
+
+      - name: Set up Go for source build
+        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # In a dry run gcloud and docker are replaced by shims that print the
+      # command they would have run (arguments that carry values are redacted)
+      # and answer the read-only queries the later steps ask.
+      - name: Install dry-run shims
+        if: inputs.dry_run
+        run: |
+          set -euo pipefail
+          shim_dir="${RUNNER_TEMP}/dry-run-bin"
+          mkdir -p "$shim_dir"
+          cat > "$shim_dir/gcloud" <<'SHIM'
+          #!/usr/bin/env bash
+          printed=()
+          for arg in "$@"; do
+            case "$arg" in
+              --set-env-vars=*|--update-env-vars=*)
+                names="$(printf '%s' "${arg#*=}" | tr ',' '\n' | sed 's/=.*//' | paste -sd, -)"
+                printed+=("${arg%%=*}=<${names}>") ;;
+              --headers=*|--update-headers=*) printed+=("${arg%%=*}=<redacted>") ;;
+              *) printed+=("$arg") ;;
+            esac
+          done
+          echo "[dry-run] gcloud ${printed[*]}" >&2
+          echo "gcloud ${printed[*]}" >> "${RUNNER_TEMP}/dry-run-plan.log"
+          args="$*"
+          case "$args" in
+            "projects describe"*) echo "000000000000" ;;
+            "run services describe"*latestReadyRevisionName*) echo "${SERVICE_NAME}-dry-run-00001" ;;
+            "run services describe"*) echo "https://${SERVICE_NAME}-dry-run.a.run.app" ;;
+            "scheduler jobs describe"*) exit 1 ;;
+          esac
+          exit 0
+          SHIM
+          cat > "$shim_dir/docker" <<'SHIM'
+          #!/usr/bin/env bash
+          echo "[dry-run] docker $*" >&2
+          echo "docker $*" >> "${RUNNER_TEMP}/dry-run-plan.log"
+          SHIM
+          chmod +x "$shim_dir/gcloud" "$shim_dir/docker"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
+      - name: Mint private Go dependency token
+        id: private_go
+        if: inputs.private_go_dependencies && !inputs.dry_run
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: Iv23li26w131Kv6u3IdM
+          private-key: ${{ secrets.SNEAT_RELEASER_PRIVATE_KEY }}
+          owner: datatug
+          repositories: backend,datatug-core
+          permission-contents: read
+
+      - name: Configure private Go dependency credentials
+        if: inputs.private_go_dependencies && !inputs.dry_run
+        env:
+          BACKEND_DEPENDENCY_TOKEN: ${{ steps.private_go.outputs.token }}
+          SNEAT_DEPENDENCY_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # GITHUB_ENV is ephemeral runner state, never a repository Git config.
+          printf 'BACKEND_DEPENDENCY_TOKEN=%s\nSNEAT_DEPENDENCY_TOKEN=%s\n' "$BACKEND_DEPENDENCY_TOKEN" "$SNEAT_DEPENDENCY_TOKEN" >> "$GITHUB_ENV"
+          cat >> "$GITHUB_ENV" <<'ENV'
+          GIT_CONFIG_COUNT=3
+          GIT_CONFIG_KEY_0=credential.https://github.com.useHttpPath
+          GIT_CONFIG_VALUE_0=true
+          GIT_CONFIG_KEY_1=credential.helper
+          GIT_CONFIG_VALUE_1=
+          GIT_CONFIG_KEY_2=credential.helper
+          GIT_CONFIG_VALUE_2<<PRIVATE_GO_HELPER
+          !f() {
+            [ "$1" = get ] || exit 0
+            protocol= host= path=
+            while IFS="=" read -r key value; do
+              case "$key" in protocol) protocol="$value";; host) host="$value";; path) path="$value";; esac
+            done
+            [ "$protocol" = https ] && [ "$host" = github.com ] || exit 0
+            case "$path" in
+              datatug/backend|datatug/backend.git|datatug/datatug-core|datatug/datatug-core.git) token="$BACKEND_DEPENDENCY_TOKEN";;
+              sneat-co/*|sneat-dev/*) token="$SNEAT_DEPENDENCY_TOKEN";;
+              *) exit 0;;
+            esac
+            printf "username=x-access-token\npassword=%s\n" "$token"
+          }; f
+          PRIVATE_GO_HELPER
+          ENV
+
+      - name: Build binary from source
+        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
+        env:
+          # The default GITHUB_TOKEN only grants access to this repo, so other
+          # private sneat-co modules need the org-wide CI token.
+          GOPRIVATE: ${{ inputs.goprivate }}
+          GH_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+          BUILD_CMD: ${{ inputs.go_build_cmd }}
+        run: |
+          set -euo pipefail
+          bash -euo pipefail -c "$BUILD_CMD"
+
+      - id: auth
+        name: Authenticate with Google Cloud
+        if: ${{ !inputs.dry_run }}
+        uses: google-github-actions/auth@v3
+        with:
+          service_account: ${{ inputs.deployer_sa }}
+          workload_identity_provider: ${{ inputs.wif_provider }}
+
+      # NOTE: google-github-actions/setup-gcloud is NOT on the org's Actions
+      # allowlist (only auth@* is), and referencing a disallowed action fails
+      # the whole run at startup. gcloud is preinstalled on ubuntu-latest, so
+      # inline the two things setup-gcloud did: authenticate the CLI from the
+      # auth step's credentials file and set the project.
+      - name: Configure gcloud (preinstalled on runner)
+        if: ${{ !inputs.dry_run }}
+        env:
+          CREDENTIALS_FILE: ${{ steps.auth.outputs.credentials_file_path }}
+        run: |
+          gcloud auth login --brief --cred-file="${CREDENTIALS_FILE}"
+          gcloud config set project "${GCLOUD_PROJECT_ID}"
+
+      # Propagate secrets from GitHub secrets -> Secret Manager, so GitHub is the
+      # single source of truth and the runtime picks them up via the
+      # --set-secrets bindings (values never land in the Cloud Run revision
+      # spec). Idempotent: creates the secret if missing, and only adds a new
+      # version when the value actually changed. A GitHub secret that isn't set
+      # is left untouched (so we never overwrite a real Secret Manager value
+      # with an empty one). Failures are non-fatal warnings: a deploy shouldn't
+      # break because a token sync had an IAM hiccup; existing Secret Manager
+      # values keep serving. Requires the deployer SA to have secretmanager
+      # write/read (roles/secretmanager.admin, or the granular add/access/create
+      # roles).
+      #
+      # Only OWNED secrets are synced. A shared secret is never written here.
+      #
+      # Bot-token naming invariant: the GitHub Actions secret, the Secret
+      # Manager secret (before any prefix) and the Cloud Run environment variable
+      # MUST have the exact same name: TELEGRAM_BOT_TOKEN_<UPPERCASE_BOT_ID>.
+      - name: Sync tokens from GitHub secrets to Secret Manager
+        env:
+          ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          project="${GCLOUD_PROJECT_ID}"
+          # Cloud Run's runtime service account must be able to READ each bound
+          # secret. Existing secrets already grant it; a freshly created one does
+          # not, so we grant secretAccessor on creation, otherwise the very first
+          # deploy that introduces a new secret fails with "Permission denied on
+          # secret ... for Revision service account". Self-contained: does not
+          # rely on a project-level grant existing.
+          if [ -n "${RUNTIME_SA}" ]; then
+            runtime_sa="${RUNTIME_SA}"
+          else
+            project_number="$(gcloud projects describe "$project" --format='value(projectNumber)')"
+            runtime_sa="${project_number}-compute@developer.gserviceaccount.com"
+          fi
+          all_secrets_json="${ALL_SECRETS_JSON:-}"
+          [ -n "$all_secrets_json" ] || all_secrets_json='{}'
+          sync_secret() {
+            local name="$1"
+            local sm="${SECRET_PREFIX}${name}"
+            local label="${name}"
+            [ -z "${SECRET_PREFIX}" ] || label="${name} (${sm})"
+            local value
+            # Keep the value byte-exact, trailing newlines included: the trailing
+            # "x" stops command substitution from stripping them.
+            value="$(jq -j --arg k "$name" '.[$k] // ""' <<< "$all_secrets_json"; printf x)"
+            value="${value%x}"
+            if [ -z "$value" ]; then
+              echo "· ${label}: no GitHub secret set — leaving Secret Manager untouched"
+              return 0
+            fi
+            if ! gcloud secrets describe "$sm" --project="$project" >/dev/null 2>&1; then
+              if gcloud secrets create "$sm" --replication-policy=automatic --project="$project" >/dev/null 2>&1; then
+                echo "· ${label}: created secret"
+                # Grant the Cloud Run runtime SA read access on the new secret so
+                # the --set-secrets binding can mount it.
+                if gcloud secrets add-iam-policy-binding "$sm" \
+                    --member="serviceAccount:${runtime_sa}" \
+                    --role="roles/secretmanager.secretAccessor" \
+                    --project="$project" >/dev/null 2>&1; then
+                  echo "  ↳ granted secretAccessor to ${runtime_sa}"
+                else
+                  echo "::warning::${label}: created but could not grant secretAccessor to ${runtime_sa} — the deploy may fail to bind it"
+                fi
+              else
+                echo "::warning::${label}: could not create secret in Secret Manager (deployer SA IAM?) — skipping"
+                return 0
+              fi
+            fi
+            local current
+            current="$(gcloud secrets versions access latest --secret="$sm" --project="$project" 2>/dev/null || true)"
+            if [ "$current" = "$value" ]; then
+              echo "· ${label}: unchanged"
+            elif printf '%s' "$value" | gcloud secrets versions add "$sm" --data-file=- --project="$project" >/dev/null 2>&1; then
+              echo "· ${label}: new version added"
+            else
+              echo "::warning::${label}: failed to add new version (deployer SA IAM?)"
+            fi
+          }
+          for name in $(printf '%s' "${OWNED_SECRETS}" | tr ',' ' '); do
+            sync_secret "$name"
+          done
+
+      # Plain (non-Secret-Manager) environment values read from GitHub secrets,
+      # for keys that are not credentials. Written to a private file so no
+      # later step needs the whole secrets context.
+      - name: Collect plain environment values from secrets
+        env:
+          ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/env-from-secrets.txt"
+          : > "$out"
+          chmod 600 "$out"
+          all_secrets_json="${ALL_SECRETS_JSON:-}"
+          [ -n "$all_secrets_json" ] || all_secrets_json='{}'
+          for name in $(printf '%s' "${ENV_FROM_SECRETS}" | tr ',' ' '); do
+            value="$(jq -j --arg k "$name" '.[$k] // ""' <<< "$all_secrets_json"; printf x)"
+            value="${value%x}"
+            case "$value" in
+              *,*|*$'\n'*)
+                echo "::error::${name} must not contain a comma or a newline to be used as a plain environment value"
+                exit 1
+                ;;
+            esac
+            printf '%s=%s\n' "$name" "$value" >> "$out"
+          done
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCLOUD_REGION}-docker.pkg.dev"
+
+      - name: Build Docker image
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE:-${GCLOUD_REGION}-docker.pkg.dev/${GCLOUD_PROJECT_ID}/cloud-run/${SERVICE_NAME}}"
+          docker build \
+            -t "${image}:${DEPLOY_SHA}" \
+            -t "${image}:latest" \
+            .
+
+      - name: Push Docker image
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE:-${GCLOUD_REGION}-docker.pkg.dev/${GCLOUD_PROJECT_ID}/cloud-run/${SERVICE_NAME}}"
+          docker push "${image}:${DEPLOY_SHA}"
+          docker push "${image}:latest"
+
+      # Optional secrets: bind only the ones that already exist in Secret
+      # Manager, so deploys don't break before the owner creates them (an
+      # unconditional --set-secrets on a missing secret fails the deploy).
+      # An owned secret X binds as X=<prefix>X:latest, a shared one as X=X:latest.
+      - name: Resolve secret bindings
+        run: |
+          set -euo pipefail
+          flags_file="${RUNNER_TEMP}/secret-flags.txt"
+          bound_file="${RUNNER_TEMP}/bound-secrets.txt"
+          : > "$flags_file"
+          : > "$bound_file"
+          bind_if_exists() {
+            local name="$1" sm="$2"
+            if gcloud secrets describe "${sm}" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
+              echo "--set-secrets=${name}=${sm}:latest" >> "$flags_file"
+              echo "${name} ${sm}" >> "$bound_file"
+            elif [ "$name" = "$sm" ]; then
+              echo "Skipping optional secret ${name}: not found in Secret Manager"
+            else
+              echo "Skipping optional secret ${name}: ${sm} not found in Secret Manager"
+            fi
+          }
+          for name in $(printf '%s' "${OWNED_SECRETS}" | tr ',' ' '); do
+            bind_if_exists "$name" "${SECRET_PREFIX}${name}"
+          done
+          for name in $(printf '%s' "${SHARED_SECRETS}" | tr ',' ' '); do
+            bind_if_exists "$name" "$name"
+          done
+
+          # A required secret that is not bound is a declared production
+          # capability that would silently vanish at runtime (the service still
+          # starts and /health-check still passes). Block the deploy instead.
+          missing=()
+          for name in $(printf '%s' "${REQUIRED_SECRETS}" | tr ',' ' '); do
+            if ! grep -q "^${name} " "$bound_file"; then
+              missing+=("${name}")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Required secret missing::${missing[*]} not found in Secret Manager (or not listed in owned_secrets/shared_secrets), so what is built from it would be absent at runtime. Sync the GitHub secret, or remove it from required_secrets if the capability is being retired."
+            exit 1
+          fi
+
+      # The runtime service account needs secretAccessor on every bound secret.
+      # Granting it is an IAM change, so this step only checks it and prints the
+      # exact command for someone with IAM rights.
+      - name: Check runtime service account access
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "[dry-run] would verify the runtime service account can read each bound secret"
+            exit 0
+          fi
+          project="${GCLOUD_PROJECT_ID}"
+          if [ -n "${RUNTIME_SA}" ]; then
+            runtime_sa="${RUNTIME_SA}"
+          else
+            project_number="$(gcloud projects describe "$project" --format='value(projectNumber)')"
+            runtime_sa="${project_number}-compute@developer.gserviceaccount.com"
+          fi
+          member="serviceAccount:${runtime_sa}"
+          grants='["roles/secretmanager.secretAccessor","roles/secretmanager.admin","roles/owner"]'
+          grants_access() {
+            jq -e --arg m "$member" --argjson roles "$grants" \
+              'any(.bindings[]?; (.role as $r | $roles | index($r)) and ((.members // []) | index($m)))' >/dev/null
+          }
+          project_policy="$(gcloud projects get-iam-policy "$project" --format=json 2>/dev/null || true)"
+          if [ -n "$project_policy" ] && grants_access <<< "$project_policy"; then
+            echo "${runtime_sa} can read every secret through a project-level grant"
+            exit 0
+          fi
+          missing=()
+          while read -r name sm; do
+            [ -n "$name" ] || continue
+            if ! policy="$(gcloud secrets get-iam-policy "$sm" --project="$project" --format=json 2>/dev/null)"; then
+              echo "::warning::${sm}: cannot read its IAM policy (deployer SA IAM?), so ${runtime_sa} access was not verified"
+              continue
+            fi
+            if ! grants_access <<< "$policy"; then
+              missing+=("$sm")
+            fi
+          done < "${RUNNER_TEMP}/bound-secrets.txt"
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Runtime service account cannot read secrets::${runtime_sa} lacks secretAccessor on: ${missing[*]}. Someone with IAM rights must run the commands printed above, then re-run this deploy."
+            for sm in "${missing[@]}"; do
+              echo "gcloud secrets add-iam-policy-binding ${sm} --member=${member} --role=roles/secretmanager.secretAccessor --project=${project}"
+            done
+            exit 1
+          fi
+          echo "${runtime_sa} can read every bound secret"
+
+      - name: Deploy to Cloud Run
+        env:
+          CRON_SWEEP_SECRET: ${{ secrets.CRON_SWEEP_SECRET }}
+          ENV_VARS_INPUT: ${{ inputs.env_vars }}
+          IMAGE: ${{ inputs.image }}
+          MIN_INSTANCES: ${{ inputs.min_instances }}
+          MAX_INSTANCES: ${{ inputs.max_instances }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SCHEDULER_JOB}" ] && [ -z "${CRON_SWEEP_SECRET}" ]; then
+            echo "::error::CRON_SWEEP_SECRET must be configured as a GitHub secret before deployment"
+            exit 1
+          fi
+          INVOKER_SA="cloud-tasks-invoker@${GCLOUD_PROJECT_ID}.iam.gserviceaccount.com"
+          image="${IMAGE:-${GCLOUD_REGION}-docker.pkg.dev/${GCLOUD_PROJECT_ID}/cloud-run/${SERVICE_NAME}}"
+
+          # The container cannot self-discover its public URL, and the Cloud Tasks
+          # delayer needs it at startup to build push targets. The service URL is
+          # stable once the service exists, so read it BEFORE deploying and inject
+          # it directly; steady-state deploys then converge in a single revision.
+          EXISTING_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+            --region="${GCLOUD_REGION}" \
+            --project="${GCLOUD_PROJECT_ID}" \
+            --format='value(status.url)' 2>/dev/null || true)
+          echo "Existing service URL: ${EXISTING_URL:-<none: first deploy>}"
+
+          # Environment list: the platform values, then the caller's, then the
+          # secret-derived plain values, then the service URL pair. A later entry
+          # replaces an earlier one of the same name.
+          env_file="$(mktemp)"
+          add_env() {
+            local key="$1" value="$2"
+            case "$value" in
+              *,*|*$'\n'*)
+                echo "::error::environment variable ${key} must not contain a comma or a newline (it would split --set-env-vars)"
+                exit 1
+                ;;
+            esac
+            grep -v "^${key}=" "$env_file" > "${env_file}.next" || true
+            mv "${env_file}.next" "$env_file"
+            printf '%s=%s\n' "$key" "$value" >> "$env_file"
+          }
+          # GOOGLE_CLOUD_PROJECT must be set: the binary treats an empty value as
+          # local dev and would bypass the Cloud Run delayer even with
+          # SNEAT_PLATFORM=cloudrun. Cloud Run does not set it automatically.
+          add_env GOOGLE_CLOUD_PROJECT "${GCLOUD_PROJECT_ID}"
+          add_env FIREBASE_PROJECT_ID "${GCLOUD_PROJECT_ID}"
+          add_env CLOUD_TASKS_LOCATION "${GCLOUD_REGION}"
+          add_env CLOUD_TASKS_INVOKER_SA "${INVOKER_SA}"
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            case "$line" in
+              *=*) ;;
+              *) echo "::error::env_vars: a line has no '=' (expected K=V)"; exit 1 ;;
+            esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "::error::env_vars: '${key}' is not an environment variable name"; exit 1; }
+            add_env "$key" "$value"
+          done <<< "${ENV_VARS_INPUT}"
+          if [ -s "${RUNNER_TEMP}/env-from-secrets.txt" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              add_env "${line%%=*}" "${line#*=}"
+            done < "${RUNNER_TEMP}/env-from-secrets.txt"
+          fi
+          if [ -n "${EXISTING_URL}" ]; then
+            add_env SNEAT_TASKS_BASE_URL "${EXISTING_URL}"
+            add_env CLOUD_TASKS_OIDC_AUDIENCE "${EXISTING_URL}"
+          fi
+          ENV_VARS="$(paste -sd, - < "$env_file")"
+
+          SECRET_FLAGS=()
+          while IFS= read -r flag || [ -n "$flag" ]; do
+            [ -z "$flag" ] || SECRET_FLAGS+=("$flag")
+          done < "${RUNNER_TEMP}/secret-flags.txt"
+          SA_FLAGS=()
+          if [ -n "${RUNTIME_SA}" ]; then
+            SA_FLAGS=(--service-account="${RUNTIME_SA}")
+          fi
+
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image="${image}:${DEPLOY_SHA}" \
+            --platform=managed \
+            --region="${GCLOUD_REGION}" \
+            --allow-unauthenticated \
+            --min-instances="${MIN_INSTANCES}" \
+            --max-instances="${MAX_INSTANCES}" \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=300 \
+            --set-env-vars="${ENV_VARS}" \
+            ${SA_FLAGS[@]+"${SA_FLAGS[@]}"} \
+            ${SECRET_FLAGS[@]+"${SECRET_FLAGS[@]}"} \
+            --project="${GCLOUD_PROJECT_ID}"
+
+          # First-ever deploy only: the URL did not exist beforehand, so this
+          # revision booted with no SNEAT_TASKS_BASE_URL and the delayer fell back
+          # to the in-process goroutine. Patch the now-assigned URL in so the next
+          # revision (and all future deploys, via EXISTING_URL above) is durable.
+          if [ -z "${EXISTING_URL}" ]; then
+            NEW_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+              --region="${GCLOUD_REGION}" \
+              --project="${GCLOUD_PROJECT_ID}" \
+              --format='value(status.url)')
+            echo "First-deploy bootstrap: setting SNEAT_TASKS_BASE_URL and CLOUD_TASKS_OIDC_AUDIENCE=${NEW_URL}"
+            gcloud run services update "${SERVICE_NAME}" \
+              --region="${GCLOUD_REGION}" \
+              --update-env-vars="SNEAT_TASKS_BASE_URL=${NEW_URL},CLOUD_TASKS_OIDC_AUDIENCE=${NEW_URL}" \
+              --project="${GCLOUD_PROJECT_ID}"
+          fi
+
+          # Cloud Tasks pushes to the service as CLOUD_TASKS_INVOKER_SA. The
+          # service is also public today, so a failure here is a warning; the
+          # command is printed for someone with IAM rights.
+          if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+              --region="${GCLOUD_REGION}" \
+              --member="serviceAccount:${INVOKER_SA}" \
+              --role=roles/run.invoker \
+              --project="${GCLOUD_PROJECT_ID}" >/dev/null; then
+            echo "::warning::could not grant roles/run.invoker on ${SERVICE_NAME} to ${INVOKER_SA}. Someone with IAM rights must run: gcloud run services add-iam-policy-binding ${SERVICE_NAME} --region=${GCLOUD_REGION} --member=serviceAccount:${INVOKER_SA} --role=roles/run.invoker --project=${GCLOUD_PROJECT_ID}"
+          fi
+
+      # One authenticated scheduler tick fans out to the service's module
+      # sweeps. Keep this idempotent so deploys repair a deleted or drifted job
+      # without a separate manual runbook step. An update never touches the
+      # job's paused/running state; only the run that creates it may pause it.
+      - name: Configure Cloud Scheduler job
+        if: inputs.scheduler_job != ''
+        env:
+          CRON_SWEEP_SECRET: ${{ secrets.CRON_SWEEP_SECRET }}
+          SCHEDULER_PATH: ${{ inputs.scheduler_path }}
+          SCHEDULER_CRON: ${{ inputs.scheduler_cron }}
+          SCHEDULER_CREATE_PAUSED: ${{ inputs.scheduler_create_paused }}
+        run: |
+          set -euo pipefail
+          SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+            --region="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --format='value(status.url)')
+          CRON_JOB="${SCHEDULER_JOB}"
+          CRON_ARGS=(
+            --location="${GCLOUD_REGION}"
+            --project="${GCLOUD_PROJECT_ID}"
+            --schedule="${SCHEDULER_CRON}"
+            --time-zone='Etc/UTC'
+            --uri="${SERVICE_URL}${SCHEDULER_PATH}"
+            --http-method=POST
+            --attempt-deadline=300s
+          )
+          if gcloud scheduler jobs describe "${CRON_JOB}" --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
+              --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+          else
+            gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}" \
+              --headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+            if [ "${SCHEDULER_CREATE_PAUSED}" = "true" ]; then
+              gcloud scheduler jobs pause "${CRON_JOB}" \
+                --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}"
+              echo "Created ${CRON_JOB} paused; later deploys leave its state alone"
+            fi
+          fi
+
+      # Application expiry rejects these records immediately; Firestore TTL
+      # additionally removes them. Updates are idempotent and asynchronous.
+      - name: Configure Firestore expiry policies
+        if: inputs.firestore_ttls != ''
+        env:
+          FIRESTORE_TTLS: ${{ inputs.firestore_ttls }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            gcloud firestore fields ttls update "${line#*:}" \
+              --collection-group="${line%%:*}" --enable-ttl --async --quiet \
+              --project="${GCLOUD_PROJECT_ID}"
+          done <<< "${FIRESTORE_TTLS}"
+
+      - name: Show service URL and revision
+        id: url
+        run: |
+          set -euo pipefail
+          SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --region="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --format='value(status.url)')
+          REVISION=$(gcloud run services describe "${SERVICE_NAME}" --region="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --format='value(status.latestReadyRevisionName)')
+          echo "Service deployed to: ${SERVICE_URL}"
+          # The revision line ties a running revision to the commit it was built from.
+          echo "Deployed revision: service=${SERVICE_NAME} revision=${REVISION} commit=${DEPLOY_SHA} url=${SERVICE_URL}"
+          {
+            echo "service_url=${SERVICE_URL}"
+            echo "revision=${REVISION}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "${DRY_RUN}" != "true" ]; then
+            echo "Deployed revision: service=${SERVICE_NAME} revision=${REVISION} commit=${DEPLOY_SHA} url=${SERVICE_URL}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # This is deliberately a real service/data-store probe, rather than a
+      # Cloud Run revision-status check: a revision can become ready while its
+      # Firestore credentials or transaction path are broken. It is public only
+      # because /health-check contains no user data or credentials.
+      - name: Verify Cloud Run service and datastore health
+        if: ${{ !inputs.dry_run }}
+        env:
+          SERVICE_URL: ${{ steps.url.outputs.service_url }}
+          HEALTH_EXPECT: ${{ inputs.health_check_expect }}
+        run: |
+          echo "Checking ${SERVICE_URL}/health-check ..."
+          http=""
+          for attempt in 1 2 3 4 5; do
+            http=$(curl --silent --show-error --retry 2 --retry-delay 2 \
+              -o /tmp/cloud-run-health.txt -w '%{http_code}' \
+              "${SERVICE_URL}/health-check" || true)
+            [ "$http" = "200" ] && break
+            echo "attempt ${attempt}: HTTP ${http}; retrying in 5s (new revision may still be warming up)…"
+            sleep 5
+          done
+          cat /tmp/cloud-run-health.txt 2>/dev/null || true
+          if [ "$http" != "200" ]; then
+            echo "::error::Cloud Run service health check failed (HTTP ${http})"
+            exit 1
+          fi
+          if [ -n "${HEALTH_EXPECT}" ] && ! grep -Fq -- "${HEALTH_EXPECT}" /tmp/cloud-run-health.txt; then
+            echo "::error::Cloud Run health check did not contain the expected text: ${HEALTH_EXPECT}"
+            exit 1
+          fi
+
+      # Post-deploy self-check: the protected validation endpoint checks every
+      # configured bot token and active identity, then reports webhook state.
+      # The endpoint and its secret are deployment requirements: skipping it
+      # would leave a green deployment with an unreachable bot.
+      - name: Validate deployment
+        if: ${{ !inputs.dry_run }}
+        env:
+          CICD_VALIDATE_TOKEN: ${{ secrets.CICD_VALIDATE_TOKEN }}
+          SERVICE_URL: ${{ steps.url.outputs.service_url }}
+          VALIDATE_PATH: ${{ inputs.validate_path }}
+        run: |
+          if [ -z "${CICD_VALIDATE_TOKEN}" ]; then
+            echo "::error::CICD_VALIDATE_TOKEN must be configured for the post-deployment bot health gate"
+            exit 1
+          fi
+          echo "Validating ${SERVICE_URL}${VALIDATE_PATH} ..."
+          http=""
+          for attempt in 1 2 3 4 5; do
+            http=$(curl -s -o /tmp/validate.json -w '%{http_code}' \
+              -H "X-Cicd-Token: ${CICD_VALIDATE_TOKEN}" \
+              "${SERVICE_URL}${VALIDATE_PATH}" || echo "000")
+            [ "$http" = "200" ] && break
+            echo "attempt ${attempt}: HTTP ${http}; retrying in 5s (new revision may still be warming up)…"
+            sleep 5
+          done
+          if [ "$http" != "200" ]; then
+            echo "::error::${VALIDATE_PATH} is unreachable (HTTP ${http})"
+            exit 1
+          fi
+          echo "Checks:"
+          jq -r '.checks[] | "  [\(.status)] \(.name): \(.message)"' /tmp/validate.json || cat /tmp/validate.json
+          status=$(jq -r '.status' /tmp/validate.json)
+          echo "Overall validation status: ${status}"
+          if [ "$status" = "error" ]; then
+            errors=$(jq '[.checks[] | select(.status == "error")] | length' /tmp/validate.json)
+            echo "::error::Deployment validation FAILED (${errors} error checks) — see checks above."
+            exit 1
+          elif [ "$status" = "warning" ]; then
+            echo "::warning::Deployment validation has warnings — see checks above."
+          fi
+
+      - name: Dry-run plan
+        if: inputs.dry_run
+        env:
+          SERVICE_URL: ${{ steps.url.outputs.service_url }}
+          VALIDATE_PATH: ${{ inputs.validate_path }}
+        run: |
+          set -euo pipefail
+          plan="${RUNNER_TEMP}/dry-run-plan.log"
+          {
+            echo "### Dry-run plan for ${SERVICE_NAME}"
+            echo
+            echo '```'
+            cat "$plan"
+            echo "# then GET ${SERVICE_URL}/health-check and ${SERVICE_URL}${VALIDATE_PATH}"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -q '^gcloud run deploy ' "$plan" || { echo "::error::dry run planned no 'gcloud run deploy'"; exit 1; }
