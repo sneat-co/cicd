@@ -95,6 +95,11 @@ that another service owns:
 - A **shared** secret `X` is bound as `X=X:latest` and is never written.
 - Both kinds are bound only when the Secret Manager secret exists.
   `required_secrets` lists names that must be bound, or the deploy stops first.
+- `secret_bindings` maps an explicit environment name to a read-only Secret
+  Manager reference, one `ENV_NAME=secret-name:version` per line. The version
+  is a positive number or `latest`; a missing or disabled mapped secret/version
+  fails the deploy. Mapped secrets are not copied or synchronized. Add the
+  mapped environment name to `required_secrets` when the service requires it.
 - A service that owns secrets must set `secret_prefix`; an empty prefix needs
   `allow_unprefixed_secrets: true` (sneat-go, the owner of the shared secrets).
   Secret lists take upper-case names only.
@@ -111,11 +116,18 @@ The workflow always sets `GOOGLE_CLOUD_PROJECT`, `FIREBASE_PROJECT_ID`,
 and `CLOUD_TASKS_OIDC_AUDIENCE` to the service's own URL (patching them in after
 the first-ever deploy), and grants `roles/run.invoker` on the service to the
 Cloud Tasks invoker account. `scheduler_job` creates or updates one Scheduler
-job authenticated with the GitHub secret `CRON_SWEEP_SECRET`; with
-`scheduler_create_paused` the job is created without its `X-Cron-Secret` header
-(so a tick before the pause is rejected), paused, and only then given the header;
-if either step fails the job is deleted so a re-run recreates it paused. An
-update never changes a job's paused or running state.
+job authenticated with the GitHub secret `CRON_SWEEP_SECRET` by default. To use
+OIDC, set both `scheduler_oidc_service_account` and an explicit HTTPS
+`scheduler_oidc_audience`; the account must belong to the job's project. OIDC
+updates remove the legacy `X-Cron-Secret` header. With
+`scheduler_create_paused`, a new job is created without authentication, paused,
+and only then given its configured authentication; if pausing or attaching
+authentication fails, the job is deleted so a re-run recreates it paused. An
+update never changes a job's paused or running state. OIDC setup requires the
+deployer to have `iam.serviceAccounts.actAs` on the account, that account to
+have `roles/run.invoker` on the Cloud Run service, and the project's Cloud
+Scheduler service agent to retain `roles/cloudscheduler.serviceAgent`. The
+workflow reports no IAM grants and creates no credentials.
 
 `dry_run: true` replaces `gcloud` and `docker` with shims that print the
 planned commands (environment and header values redacted) into the job summary.
