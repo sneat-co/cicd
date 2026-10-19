@@ -52,6 +52,16 @@ case "$1 $2 $3" in
     name=""
     for a in "$@"; do case "$a" in --secret=*) name="${a#--secret=}" ;; esac; done
     cat "$d/secrets/$name" ;;
+  "secrets versions list")
+    [ -f "$d/secrets/$4" ] || exit 1
+    [ -z "${FAKE_FAIL_VERSION:-}" ] || exit 1
+    echo 'ENABLED' ;;
+  "secrets versions describe")
+    name=""
+    for a in "$@"; do case "$a" in --secret=*) name="${a#--secret=}" ;; esac; done
+    [ -f "$d/secrets/$name" ] || exit 1
+    [ -z "${FAKE_FAIL_VERSION:-}" ] || exit 1
+    echo 'ENABLED' ;;
   "secrets versions add")
     [ -z "${FAKE_FAIL_ADD:-}" ] || exit 1
     cat > "$d/secrets/$4" ;;
@@ -75,7 +85,7 @@ case "$1 $2 $3" in
   "scheduler jobs create") : > "$d/scheduler/$5" ;;
   "scheduler jobs pause") [ -z "${FAKE_FAIL_PAUSE:-}" ] || exit 1 ;;
   "scheduler jobs update")
-    case "$*" in *--update-headers=*) [ -z "${FAKE_FAIL_HEADER:-}" ] || exit 1 ;; esac ;;
+    case "$*" in *--update-headers=*|*--oidc-service-account-email=*) [ -z "${FAKE_FAIL_HEADER:-}" ] || exit 1 ;; esac ;;
   "scheduler jobs delete")
     [ -z "${FAKE_FAIL_DELETE:-}" ] || exit 1
     rm -f "$d/scheduler/$4" ;;
@@ -119,7 +129,8 @@ run_step() {
     GITHUB_REPOSITORY=sneat-co/fixture GITHUB_ENV="$work/gh_env" \
     GCLOUD_PROJECT_ID=test-proj GCLOUD_REGION=europe-west3 SERVICE_NAME=svc DEPLOY_SHA="$SHA" \
     DRY_RUN=false SECRET_PREFIX= OWNED_SECRETS= SHARED_SECRETS= REQUIRED_SECRETS= \
-    ENV_FROM_SECRETS= RUNTIME_SA= SCHEDULER_JOB= \
+    ENV_FROM_SECRETS= SECRET_BINDINGS= ENV_VARS_INPUT= RUNTIME_SA= SCHEDULER_JOB= \
+    SCHEDULER_OIDC_SERVICE_ACCOUNT= SCHEDULER_OIDC_AUDIENCE= \
     "$@" bash -e "$script" 2>&1)"
   CODE=$?
   set -e
@@ -155,6 +166,21 @@ reset; run_step "$V" "${valid_env[@]}"; ok "defaults validate"
 reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME=games-cloud SECRET_PREFIX=GAMES_CLOUD__ \
   OWNED_SECRETS="A_ONE B_TWO" SHARED_SECRETS="C_THREE" REQUIRED_SECRETS="A_ONE" ENV_FROM_SECRETS=PAIR_MATCHING_GAME_SECRET \
   SCHEDULER_JOB=games-cron 'FIRESTORE_TTLS=sso-flows:expiresAt'; ok "full valid set"
+reset; run_step "$V" "${valid_env[@]}" 'SECRET_BINDINGS=DATATUG_PERSONAL_CLOUD_LOGS_CLIENT_SECRET=datatug-cloud-logs-oauth-client-secret:1'; ok "explicit secret mapping"
+reset; run_step "$V" "${valid_env[@]}" $'SECRET_BINDINGS=MAP_ONE=secret-one:latest\nMAP_TWO=secret-two:2'; ok "multiline explicit mappings"
+reset; run_step "$V" "${valid_env[@]}" 'SECRET_BINDINGS=lower_name=secret:1'; bad "mapped lower-case env name"
+reset; run_step "$V" "${valid_env[@]}" 'SECRET_BINDINGS=BAD'; bad "malformed mapped entry"
+reset; run_step "$V" "${valid_env[@]}" 'SECRET_BINDINGS=MAP=bad/secret:1'; bad "invalid secret manager name"
+reset; run_step "$V" "${valid_env[@]}" 'SECRET_BINDINGS=MAP=secret:0'; bad "invalid zero version"
+reset; run_step "$V" "${valid_env[@]}" $'SECRET_BINDINGS=MAP=secret:1\nMAP=other:latest'; bad "duplicate mapped env name"
+reset; run_step "$V" "${valid_env[@]}" $'SECRET_BINDINGS=MAP=secret:1\nOTHER=secret:1'; bad "duplicate mapped secret reference"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 OWNED_SECRETS=MAP SECRET_PREFIX=P__; bad "mapped name collides with owned"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 SHARED_SECRETS=MAP; bad "mapped name collides with shared"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 'ENV_VARS_INPUT=MAP=plain'; bad "mapped name collides with env vars"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 REQUIRED_SECRETS=MAP; ok "required mapped name"
+reset; run_step "$V" "${valid_env[@]}" SCHEDULER_JOB=cron SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@other-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=https://svc.example; bad "OIDC service account other project"
+reset; run_step "$V" "${valid_env[@]}" SCHEDULER_JOB=cron SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@test-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=http://svc.example; bad "OIDC audience HTTPS required"
+reset; run_step "$V" "${valid_env[@]}" SCHEDULER_JOB=cron SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@test-proj.iam.gserviceaccount.com; bad "OIDC inputs supplied together"
 reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME=Bad_Name; bad "service name"
 reset; run_step "$V" "${valid_env[@]}" SECRET_PREFIX='bad prefix'; bad "secret prefix"
 reset; run_step "$V" "${valid_env[@]}" OWNED_SECRETS="1BAD" SECRET_PREFIX=P__; bad "secret name"
@@ -305,6 +331,33 @@ has "$OUT" "Skipping optional secret B: P__B not found in Secret Manager"
 has "$OUT" "Skipping optional secret T: not found in Secret Manager"
 
 reset
+put_secret datatug-cloud-logs-oauth-client-secret sentinel-secret-value
+run_step "$R" 'SECRET_BINDINGS=DATATUG_PERSONAL_CLOUD_LOGS_CLIENT_SECRET=datatug-cloud-logs-oauth-client-secret:1' REQUIRED_SECRETS=DATATUG_PERSONAL_CLOUD_LOGS_CLIENT_SECRET
+ok "explicit read-only binding"
+[ "$(cat "$rt/secret-flags.txt")" = "--set-secrets=DATATUG_PERSONAL_CLOUD_LOGS_CLIENT_SECRET=datatug-cloud-logs-oauth-client-secret:1" ] || fail "mapped version flag"
+[ "$(cat "$rt/bound-secrets.txt")" = "DATATUG_PERSONAL_CLOUD_LOGS_CLIENT_SECRET datatug-cloud-logs-oauth-client-secret 1" ] || fail "mapped bound secret record"
+hasnt "$(calls)" "versions access"
+hasnt "$OUT" "sentinel-secret-value"
+hasnt "$(calls)" "sentinel-secret-value"
+
+reset
+run_step "$R" 'SECRET_BINDINGS=MAP=missing-secret:1'
+bad "missing explicit secret fails"
+has "$OUT" "MAP references Secret Manager secret missing-secret, which does not exist"
+
+reset
+put_secret mapped x
+run_step "$R" 'SECRET_BINDINGS=MAP=mapped:9' FAKE_FAIL_VERSION=1
+bad "missing explicit version fails"
+has "$OUT" "MAP references mapped:9, which is missing or disabled"
+
+reset
+put_secret mapped x
+run_step "$R" 'SECRET_BINDINGS=MAP=mapped:latest' FAKE_FAIL_VERSION=1
+bad "missing enabled latest version fails"
+has "$OUT" "MAP references mapped:latest, which has no enabled version"
+
+reset
 put_secret P__A x; put_secret S x
 run_step "$R" SECRET_PREFIX=P__ OWNED_SECRETS="A" SHARED_SECRETS="S" REQUIRED_SECRETS="A S"
 ok "required present"
@@ -334,6 +387,14 @@ echo '{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serv
 run_step "$C" RUNTIME_SA="$RT"
 ok "project-level grant"
 hasnt "$(calls)" "secrets get-iam-policy"
+
+reset
+printf 'MAP mapped-secret 7\n' > "$rt/bound-secrets.txt"
+echo '{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:rt@test-proj.iam.gserviceaccount.com"]}]}' > "$fake/policy/mapped-secret.json"
+run_step "$C" RUNTIME_SA="$RT"
+ok "explicit mapped secret access check"
+has "$(calls)" "secrets get-iam-policy mapped-secret --project=test-proj --format=json"
+hasnt "$(calls)" "mapped-secret 7"
 
 reset
 printf 'A P__A\nS S\n' > "$rt/bound-secrets.txt"
@@ -535,6 +596,48 @@ has "$update" "--update-headers=X-Cron-Secret=cron-secret"
 [ "$(count_calls 'scheduler jobs pause')" = "0" ] || fail "update must not pause"
 [ "$(count_calls 'scheduler jobs resume')" = "0" ] || fail "update must not resume"
 
+# OIDC jobs use explicit auth settings and remove the legacy cron header.
+oidc_env=(SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@test-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=https://svc.example/cron)
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" "${oidc_env[@]}" CRON_SWEEP_SECRET= SCHEDULER_CREATE_PAUSED=false
+ok "OIDC scheduler create"
+create="$(line_with 'scheduler jobs create http svc-cron')"
+has "$create" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
+hasnt "$create" "X-Cron-Secret"
+hasnt "$create" "cron-secret"
+
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"; : > "$fake/scheduler/svc-cron"
+run_step "$J" "${sched_env[@]}" "${oidc_env[@]}" SCHEDULER_CREATE_PAUSED=true
+ok "OIDC scheduler update"
+update="$(line_with 'scheduler jobs update http svc-cron')"
+has "$update" "--remove-headers=X-Cron-Secret"
+has "$update" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
+hasnt "$update" "--update-headers"
+hasnt "$(calls)" "cron-secret"
+[ "$(count_calls 'scheduler jobs pause')" = "0" ] || fail "OIDC update must preserve state"
+
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" "${oidc_env[@]}" CRON_SWEEP_SECRET= SCHEDULER_CREATE_PAUSED=true
+ok "OIDC scheduler create paused"
+sched_calls="$(grep 'scheduler jobs' "$fake/calls.log")"
+create="$(sed -n 2p <<< "$sched_calls")"
+hasnt "$create" "oidc"
+hasnt "$create" "headers"
+[ "$(sed -n 3p <<< "$sched_calls")" = "gcloud scheduler jobs pause svc-cron --location=europe-west3 --project=test-proj" ] || fail "OIDC pause happens before auth"
+update="$(sed -n 4p <<< "$sched_calls")"
+has "$update" "--remove-headers=X-Cron-Secret"
+has "$update" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
+hasnt "$update" "cron-secret"
+
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$J" "${sched_env[@]}" "${oidc_env[@]}" SCHEDULER_CREATE_PAUSED=true FAKE_FAIL_HEADER=1
+bad "OIDC attachment failure fails the step"
+sched_calls="$(grep 'scheduler jobs' "$fake/calls.log" | sed -E 's/ --.*//')"
+has "$sched_calls" "gcloud scheduler jobs pause svc-cron"
+has "$sched_calls" "gcloud scheduler jobs update http svc-cron"
+has "$sched_calls" "gcloud scheduler jobs delete svc-cron"
+[ ! -f "$fake/scheduler/svc-cron" ] || fail "job deleted after OIDC attachment failure"
+
 # --- Firestore TTLs -----------------------------------------------------------------------
 
 T="Configure Firestore expiry policies"
@@ -713,7 +816,8 @@ dry() { # dry "<step>" [VAR=value ...]: runs with the shims first on PATH and no
   OUT="$(cd "$sandbox" && env -i PATH="$shim_dir:/usr/bin:/bin:/opt/homebrew/bin" HOME="$work" RUNNER_TEMP="$rt" \
     GITHUB_OUTPUT="$work/gh_output" GITHUB_STEP_SUMMARY="$work/summary" \
     GCLOUD_PROJECT_ID=test-proj GCLOUD_REGION=europe-west3 SERVICE_NAME=svc DEPLOY_SHA="$SHA" DRY_RUN=true \
-    SECRET_PREFIX=P__ OWNED_SECRETS="A" SHARED_SECRETS="S" REQUIRED_SECRETS= ENV_FROM_SECRETS=PLAIN RUNTIME_SA= SCHEDULER_JOB=svc-cron \
+    SECRET_PREFIX=P__ OWNED_SECRETS="A" SHARED_SECRETS="S" REQUIRED_SECRETS= SECRET_BINDINGS= ENV_VARS_INPUT= ENV_FROM_SECRETS=PLAIN RUNTIME_SA= SCHEDULER_JOB=svc-cron \
+    SCHEDULER_OIDC_SERVICE_ACCOUNT= SCHEDULER_OIDC_AUDIENCE= \
     "$@" bash -e "$script" 2>&1)"
   CODE=$?
   set -e
@@ -724,10 +828,11 @@ dry "Collect plain environment values from secrets" 'ALL_SECRETS_JSON={"PLAIN":"
 dry "Configure Docker for Artifact Registry"
 dry "Build Docker image" IMAGE=
 dry "Push Docker image" IMAGE=
-dry "Resolve secret bindings"
+dry "Resolve secret bindings" 'SECRET_BINDINGS=MAP=explicit-secret:7'
 dry "Check runtime service account access"
 dry "Deploy to Cloud Run" CRON_SWEEP_SECRET=cron-secret-value ENV_VARS_INPUT=SNEAT_PLATFORM=cloudrun IMAGE= MIN_INSTANCES=0 MAX_INSTANCES=2
 dry "Configure Cloud Scheduler job" CRON_SWEEP_SECRET=cron-secret-value SCHEDULER_PATH=/v0/cron/sweep 'SCHEDULER_CRON=*/5 * * * *' SCHEDULER_CREATE_PAUSED=true
+dry "Configure Cloud Scheduler job" CRON_SWEEP_SECRET= SCHEDULER_PATH=/v0/cron/sweep 'SCHEDULER_CRON=*/5 * * * *' SCHEDULER_CREATE_PAUSED=true SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@test-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=https://svc.example/cron
 dry "Configure Firestore expiry policies" 'FIRESTORE_TTLS=grp:field'
 dry "Show service URL and revision"
 dry "Dry-run plan" SERVICE_URL=https://svc-dry-run.a.run.app VALIDATE_PATH=/cicd/validate
@@ -735,11 +840,14 @@ plan="$(cat "$rt/dry-run-plan.log")"
 has "$plan" "docker build -t europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:$SHA -t europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:latest ."
 has "$plan" "gcloud run deploy svc --image=europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:$SHA"
 has "$plan" "--set-secrets=A=P__A:latest --set-secrets=S=S:latest"
+has "$plan" "--set-secrets=MAP=explicit-secret:7"
 has "$plan" "gcloud scheduler jobs create http svc-cron"
 has "$plan" "gcloud scheduler jobs pause svc-cron"
 has "$plan" "gcloud firestore fields ttls update field --collection-group=grp"
 has "$plan" "--set-env-vars=<GOOGLE_CLOUD_PROJECT,FIREBASE_PROJECT_ID,CLOUD_TASKS_LOCATION,CLOUD_TASKS_INVOKER_SA,SNEAT_PLATFORM,PLAIN,SNEAT_TASKS_BASE_URL,CLOUD_TASKS_OIDC_AUDIENCE>"
 has "$plan" "--update-headers=<redacted>"
+has "$plan" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
+hasnt "$plan" "explicit-secret-value"
 hasnt "$(grep 'scheduler jobs create' <<< "$plan")" "headers"
 for leaked in super-secret-a plain-secret-value cron-secret-value; do
   hasnt "$plan" "$leaked"

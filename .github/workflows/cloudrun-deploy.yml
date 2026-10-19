@@ -44,6 +44,11 @@ name: Cloud Run Deploy (reusable)
 # workflow itself creates. The runtime service account must already have
 # roles/secretmanager.secretAccessor on every bound secret; the workflow checks
 # that and fails with the exact `gcloud` command for someone with IAM rights.
+# For Scheduler OIDC, the caller must have iam.serviceAccounts.actAs on the
+# same-project OIDC service account, that account must already have
+# roles/run.invoker on the target service, and the project's Cloud Scheduler
+# service agent must retain roles/cloudscheduler.serviceAgent. This workflow
+# never creates credentials or grants IAM.
 
 on:
   workflow_call:
@@ -170,6 +175,14 @@ on:
         type: string
         required: false
         default: ""
+      secret_bindings:
+        description: >-
+          Read-only Secret Manager bindings, one `ENV_NAME=secret-name:version`
+          per line. Version is a positive number or `latest`; mapped secrets
+          are never synced or copied by this workflow.
+        type: string
+        required: false
+        default: ""
       scheduler_job:
         description: Cloud Scheduler job name. Empty means no Scheduler job.
         type: string
@@ -180,6 +193,18 @@ on:
         type: boolean
         required: false
         default: false
+      scheduler_oidc_service_account:
+        description: >-
+          Optional same-project service account used for Cloud Scheduler OIDC.
+          Requires scheduler_oidc_audience and preconfigured IAM permissions.
+        type: string
+        required: false
+        default: ""
+      scheduler_oidc_audience:
+        description: Explicit HTTPS audience for Cloud Scheduler OIDC; required with scheduler_oidc_service_account.
+        type: string
+        required: false
+        default: ""
       scheduler_path:
         description: Path the Scheduler job POSTs to
         type: string
@@ -264,6 +289,8 @@ jobs:
       OWNED_SECRETS: ${{ inputs.owned_secrets }}
       SHARED_SECRETS: ${{ inputs.shared_secrets }}
       REQUIRED_SECRETS: ${{ inputs.required_secrets }}
+      SECRET_BINDINGS: ${{ inputs.secret_bindings }}
+      ENV_VARS_INPUT: ${{ inputs.env_vars }}
       ENV_FROM_SECRETS: ${{ inputs.env_from_secrets }}
       RUNTIME_SA: ${{ inputs.runtime_sa }}
       SCHEDULER_JOB: ${{ inputs.scheduler_job }}
@@ -290,6 +317,8 @@ jobs:
           BINARY_NAME: ${{ inputs.binary_name }}
           WIF_PROVIDER: ${{ inputs.wif_provider }}
           DEPLOYER_SA: ${{ inputs.deployer_sa }}
+          SCHEDULER_OIDC_SERVICE_ACCOUNT: ${{ inputs.scheduler_oidc_service_account }}
+          SCHEDULER_OIDC_AUDIENCE: ${{ inputs.scheduler_oidc_audience }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
@@ -318,6 +347,34 @@ jobs:
           check_names shared_secrets "$SHARED_SECRETS"
           check_names required_secrets "$REQUIRED_SECRETS"
           check_names env_from_secrets "$ENV_FROM_SECRETS"
+          mapped_names=" "
+          mapped_refs=" "
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            [[ "$line" == *=* ]] || fail "secret_bindings: '${line}' must be ENV_NAME=secret-name:version"
+            name="${line%%=*}"
+            ref="${line#*=}"
+            [[ "$name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || fail "secret_bindings: '${name}' must be an upper-case environment variable name"
+            [[ "$ref" =~ ^[A-Za-z0-9_-]{1,255}:(latest|[1-9][0-9]*)$ ]] || fail "secret_bindings: '${name}' must map to a Secret Manager name and version (positive number or latest)"
+            case "$mapped_names" in *" ${name} "*) fail "secret_bindings: '${name}' is listed twice" ;; esac
+            case "$mapped_refs" in *" ${ref} "*) fail "secret_bindings: '${ref}' is listed twice" ;; esac
+            case " $(printf '%s' "$OWNED_SECRETS" | tr ',' ' ') " in *" ${name} "*) fail "secret_bindings: '${name}' collides with owned_secrets" ;; esac
+            case " $(printf '%s' "$SHARED_SECRETS" | tr ',' ' ') " in *" ${name} "*) fail "secret_bindings: '${name}' collides with shared_secrets" ;; esac
+            while IFS= read -r env_line || [ -n "$env_line" ]; do
+              env_line="${env_line%$'\r'}"
+              env_line="${env_line#"${env_line%%[![:space:]]*}"}"
+              case "$env_line" in ''|'#'*) continue ;; esac
+              case "$env_line" in *=*) env_name="${env_line%%=*}" ;; *) continue ;; esac
+              if [ "$env_name" = "$name" ]; then
+                fail "secret_bindings: '${name}' collides with env_vars"
+              fi
+            done <<< "$ENV_VARS_INPUT"
+            mapped_names="${mapped_names}${name} "
+            mapped_refs="${mapped_refs}${ref} "
+          done <<< "$SECRET_BINDINGS"
           for name in $(printf '%s' "$OWNED_SECRETS" | tr ',' ' '); do
             case " $(printf '%s' "$SHARED_SECRETS" | tr ',' ' ') " in
               *" ${name} "*|*" ${SECRET_PREFIX}${name} "*) fail "'${name}' is both an owned and a shared secret" ;;
@@ -338,6 +395,13 @@ jobs:
             [ -n "$SCHEDULER_CRON" ] || fail "scheduler_cron is required with scheduler_job"
           elif [ "$SCHEDULER_CREATE_PAUSED" = "true" ]; then
             fail "scheduler_create_paused needs scheduler_job"
+          fi
+
+          if [ -n "$SCHEDULER_OIDC_SERVICE_ACCOUNT" ] || [ -n "$SCHEDULER_OIDC_AUDIENCE" ]; then
+            [ -n "$SCHEDULER_JOB" ] || fail "scheduler OIDC inputs need scheduler_job"
+            [ -n "$SCHEDULER_OIDC_SERVICE_ACCOUNT" ] && [ -n "$SCHEDULER_OIDC_AUDIENCE" ] || fail "scheduler_oidc_service_account and scheduler_oidc_audience must be supplied together"
+            [[ "$SCHEDULER_OIDC_SERVICE_ACCOUNT" =~ ^[A-Za-z0-9._-]+@${GCLOUD_PROJECT_ID}\.iam\.gserviceaccount\.com$ ]] || fail "scheduler_oidc_service_account must be a service account in project ${GCLOUD_PROJECT_ID}"
+            [[ "$SCHEDULER_OIDC_AUDIENCE" =~ ^https://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[0-9]{1,5})?([/?#][^[:space:]]*)?$ ]] || fail "scheduler_oidc_audience must be an explicit HTTPS URL"
           fi
 
           while IFS= read -r line || [ -n "$line" ]; do
@@ -446,6 +510,8 @@ jobs:
             "projects describe"*) echo "000000000000" ;;
             "run services describe"*latestReadyRevisionName*) echo "${SERVICE_NAME}-dry-run-00001" ;;
             "run services describe"*) echo "https://${SERVICE_NAME}-dry-run.a.run.app" ;;
+            "secrets versions list"*) echo ENABLED ;;
+            "secrets versions describe"*) echo ENABLED ;;
             "scheduler jobs describe"*) exit 1 ;;
           esac
           exit 0
@@ -711,6 +777,35 @@ jobs:
           for name in $(printf '%s' "${SHARED_SECRETS}" | tr ',' ' '); do
             bind_if_exists "$name" "$name"
           done
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            name="${line%%=*}"
+            ref="${line#*=}"
+            sm="${ref%:*}"
+            version="${ref##*:}"
+            if ! gcloud secrets describe "$sm" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
+              echo "::error title=Explicit secret binding missing::${name} references Secret Manager secret ${sm}, which does not exist"
+              exit 1
+            fi
+            if [ "$version" = "latest" ]; then
+              states="$(gcloud secrets versions list "$sm" --filter='state=ENABLED' --limit=1 --format='value(state)' --project="${GCLOUD_PROJECT_ID}" 2>/dev/null || true)"
+              if [ -z "$states" ]; then
+                echo "::error title=Explicit secret version missing::${name} references ${sm}:latest, which has no enabled version"
+                exit 1
+              fi
+            else
+              state="$(gcloud secrets versions describe "$version" --secret="$sm" --format='value(state)' --project="${GCLOUD_PROJECT_ID}" 2>/dev/null || true)"
+              if [ "$state" != "ENABLED" ]; then
+                echo "::error title=Explicit secret version missing::${name} references ${sm}:${version}, which is missing or disabled"
+                exit 1
+              fi
+            fi
+            echo "--set-secrets=${name}=${sm}:${version}" >> "$flags_file"
+            printf '%s %s %s\n' "$name" "$sm" "$version" >> "$bound_file"
+          done <<< "${SECRET_BINDINGS}"
 
           # A required secret that is not bound is a declared production
           # capability that would silently vanish at runtime (the service still
@@ -757,6 +852,7 @@ jobs:
           missing=()
           while read -r name sm; do
             [ -n "$name" ] || continue
+            sm="${sm%% *}"
             if ! policy="$(gcloud secrets get-iam-policy "$sm" --project="$project" --format=json 2>/dev/null)"; then
               echo "::warning::${sm}: cannot read its IAM policy (deployer SA IAM?), so ${runtime_sa} access was not verified"
               continue
@@ -778,12 +874,14 @@ jobs:
         env:
           CRON_SWEEP_SECRET: ${{ secrets.CRON_SWEEP_SECRET }}
           ENV_VARS_INPUT: ${{ inputs.env_vars }}
+          SCHEDULER_OIDC_SERVICE_ACCOUNT: ${{ inputs.scheduler_oidc_service_account }}
+          SCHEDULER_OIDC_AUDIENCE: ${{ inputs.scheduler_oidc_audience }}
           IMAGE: ${{ inputs.image }}
           MIN_INSTANCES: ${{ inputs.min_instances }}
           MAX_INSTANCES: ${{ inputs.max_instances }}
         run: |
           set -euo pipefail
-          if [ -n "${SCHEDULER_JOB}" ] && [ -z "${CRON_SWEEP_SECRET}" ]; then
+          if [ -n "${SCHEDULER_JOB}" ] && [ -z "${SCHEDULER_OIDC_SERVICE_ACCOUNT}" ] && [ -z "${CRON_SWEEP_SECRET}" ]; then
             if [ "${DRY_RUN}" = "true" ]; then
               echo "[dry-run] CRON_SWEEP_SECRET is not set; a real deploy would stop here"
             else
@@ -913,6 +1011,8 @@ jobs:
           SCHEDULER_PATH: ${{ inputs.scheduler_path }}
           SCHEDULER_CRON: ${{ inputs.scheduler_cron }}
           SCHEDULER_CREATE_PAUSED: ${{ inputs.scheduler_create_paused }}
+          SCHEDULER_OIDC_SERVICE_ACCOUNT: ${{ inputs.scheduler_oidc_service_account }}
+          SCHEDULER_OIDC_AUDIENCE: ${{ inputs.scheduler_oidc_audience }}
         run: |
           set -euo pipefail
           SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
@@ -927,16 +1027,26 @@ jobs:
             --http-method=POST
             --attempt-deadline=300s
           )
+          OIDC_ARGS=()
+          if [ -n "${SCHEDULER_OIDC_SERVICE_ACCOUNT}" ]; then
+            OIDC_ARGS=(
+              --oidc-service-account-email="${SCHEDULER_OIDC_SERVICE_ACCOUNT}"
+              --oidc-token-audience="${SCHEDULER_OIDC_AUDIENCE}"
+            )
+          fi
           if gcloud scheduler jobs describe "${CRON_JOB}" --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
-            gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
-              --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+            if [ "${#OIDC_ARGS[@]}" -gt 0 ]; then
+              gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
+                --remove-headers=X-Cron-Secret "${OIDC_ARGS[@]}"
+            else
+              gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
+                --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+            fi
           elif [ "${SCHEDULER_CREATE_PAUSED}" = "true" ]; then
-            # Cloud Scheduler cannot create a job paused, so the job is created
-            # WITHOUT its X-Cron-Secret header (the sweep rejects a tick that
-            # lacks it), paused, and only then given the header. If pausing or
-            # the header update fails the job is deleted, so a re-run recreates
-            # it paused instead of leaving a running job that the update path
-            # would never pause.
+            # Cloud Scheduler cannot create a job paused, so create without
+            # authentication, pause it, and only then attach the configured
+            # authentication. If pausing or the auth update fails, delete the
+            # job so a re-run can recreate it paused.
             discard_job() {
               echo "::error::${CRON_JOB} could not be created paused; deleting it so the next run recreates it paused"
               gcloud scheduler jobs delete "${CRON_JOB}" \
@@ -947,13 +1057,23 @@ jobs:
             gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}"
             gcloud scheduler jobs pause "${CRON_JOB}" \
               --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" || discard_job
-            gcloud scheduler jobs update http "${CRON_JOB}" \
-              --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \
-              --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}" || discard_job
+            if [ "${#OIDC_ARGS[@]}" -gt 0 ]; then
+              gcloud scheduler jobs update http "${CRON_JOB}" \
+                --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \
+                --remove-headers=X-Cron-Secret "${OIDC_ARGS[@]}" || discard_job
+            else
+              gcloud scheduler jobs update http "${CRON_JOB}" \
+                --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \
+                --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}" || discard_job
+            fi
             echo "Created ${CRON_JOB} paused; later deploys leave its state alone"
           else
-            gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}" \
-              --headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+            if [ "${#OIDC_ARGS[@]}" -gt 0 ]; then
+              gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}" "${OIDC_ARGS[@]}"
+            else
+              gcloud scheduler jobs create http "${CRON_JOB}" "${CRON_ARGS[@]}" \
+                --headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+            fi
           fi
 
       # Application expiry rejects these records immediately; Firestore TTL
