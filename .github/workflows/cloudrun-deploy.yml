@@ -347,6 +347,14 @@ jobs:
           check_names shared_secrets "$SHARED_SECRETS"
           check_names required_secrets "$REQUIRED_SECRETS"
           check_names env_from_secrets "$ENV_FROM_SECRETS"
+          list_contains_name() {
+            local wanted="$1" list="$2" item
+            for item in $(printf '%s' "$list" | tr ',' ' '); do
+              [ "$item" = "$wanted" ] && return 0
+            done
+            return 1
+          }
+          workflow_env_names='GOOGLE_CLOUD_PROJECT FIREBASE_PROJECT_ID CLOUD_TASKS_LOCATION CLOUD_TASKS_INVOKER_SA SNEAT_TASKS_BASE_URL CLOUD_TASKS_OIDC_AUDIENCE'
           mapped_names=" "
           mapped_refs=" "
           while IFS= read -r line || [ -n "$line" ]; do
@@ -361,8 +369,10 @@ jobs:
             [[ "$ref" =~ ^[A-Za-z0-9_-]{1,255}:(latest|[1-9][0-9]*)$ ]] || fail "secret_bindings: '${name}' must map to a Secret Manager name and version (positive number or latest)"
             case "$mapped_names" in *" ${name} "*) fail "secret_bindings: '${name}' is listed twice" ;; esac
             case "$mapped_refs" in *" ${ref} "*) fail "secret_bindings: '${ref}' is listed twice" ;; esac
-            case " $(printf '%s' "$OWNED_SECRETS" | tr ',' ' ') " in *" ${name} "*) fail "secret_bindings: '${name}' collides with owned_secrets" ;; esac
-            case " $(printf '%s' "$SHARED_SECRETS" | tr ',' ' ') " in *" ${name} "*) fail "secret_bindings: '${name}' collides with shared_secrets" ;; esac
+            list_contains_name "$name" "$OWNED_SECRETS" && fail "secret_bindings: '${name}' collides with owned_secrets"
+            list_contains_name "$name" "$SHARED_SECRETS" && fail "secret_bindings: '${name}' collides with shared_secrets"
+            list_contains_name "$name" "$ENV_FROM_SECRETS" && fail "secret_bindings: '${name}' collides with env_from_secrets"
+            list_contains_name "$name" "$workflow_env_names" && fail "secret_bindings: '${name}' collides with workflow environment variables"
             while IFS= read -r env_line || [ -n "$env_line" ]; do
               env_line="${env_line%$'\r'}"
               env_line="${env_line#"${env_line%%[![:space:]]*}"}"
@@ -510,7 +520,6 @@ jobs:
             "projects describe"*) echo "000000000000" ;;
             "run services describe"*latestReadyRevisionName*) echo "${SERVICE_NAME}-dry-run-00001" ;;
             "run services describe"*) echo "https://${SERVICE_NAME}-dry-run.a.run.app" ;;
-            "secrets versions list"*) echo ENABLED ;;
             "secrets versions describe"*) echo ENABLED ;;
             "scheduler jobs describe"*) exit 1 ;;
           esac
@@ -791,9 +800,9 @@ jobs:
               exit 1
             fi
             if [ "$version" = "latest" ]; then
-              states="$(gcloud secrets versions list "$sm" --filter='state=ENABLED' --limit=1 --format='value(state)' --project="${GCLOUD_PROJECT_ID}" 2>/dev/null || true)"
-              if [ -z "$states" ]; then
-                echo "::error title=Explicit secret version missing::${name} references ${sm}:latest, which has no enabled version"
+              state="$(gcloud secrets versions describe latest --secret="$sm" --format='value(state)' --project="${GCLOUD_PROJECT_ID}" 2>/dev/null || true)"
+              if [ "$state" != "ENABLED" ]; then
+                echo "::error title=Explicit secret version missing::${name} references ${sm}:latest, which is missing or disabled"
                 exit 1
               fi
             else
@@ -1040,7 +1049,7 @@ jobs:
                 --remove-headers=X-Cron-Secret "${OIDC_ARGS[@]}"
             else
               gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
-                --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
+                --clear-auth-token --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
             fi
           elif [ "${SCHEDULER_CREATE_PAUSED}" = "true" ]; then
             # Cloud Scheduler cannot create a job paused, so create without

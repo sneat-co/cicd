@@ -52,16 +52,13 @@ case "$1 $2 $3" in
     name=""
     for a in "$@"; do case "$a" in --secret=*) name="${a#--secret=}" ;; esac; done
     cat "$d/secrets/$name" ;;
-  "secrets versions list")
-    [ -f "$d/secrets/$4" ] || exit 1
-    [ -z "${FAKE_FAIL_VERSION:-}" ] || exit 1
-    echo 'ENABLED' ;;
   "secrets versions describe")
     name=""
+    version="$4"
     for a in "$@"; do case "$a" in --secret=*) name="${a#--secret=}" ;; esac; done
     [ -f "$d/secrets/$name" ] || exit 1
     [ -z "${FAKE_FAIL_VERSION:-}" ] || exit 1
-    echo 'ENABLED' ;;
+    if [ "$version" = latest ]; then echo "${FAKE_LATEST_STATE:-ENABLED}"; else echo "${FAKE_VERSION_STATE:-ENABLED}"; fi ;;
   "secrets versions add")
     [ -z "${FAKE_FAIL_ADD:-}" ] || exit 1
     cat > "$d/secrets/$4" ;;
@@ -177,6 +174,10 @@ reset; run_step "$V" "${valid_env[@]}" $'SECRET_BINDINGS=MAP=secret:1\nOTHER=sec
 reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 OWNED_SECRETS=MAP SECRET_PREFIX=P__; bad "mapped name collides with owned"
 reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 SHARED_SECRETS=MAP; bad "mapped name collides with shared"
 reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 'ENV_VARS_INPUT=MAP=plain'; bad "mapped name collides with env vars"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 ENV_FROM_SECRETS=MAP; bad "mapped name collides with env_from_secrets"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=GOOGLE_CLOUD_PROJECT=secret:1; bad "mapped name collides with generated env"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 $'OWNED_SECRETS=A\nMAP' SECRET_PREFIX=P__; bad "mapped name collides with multiline owned secrets"
+reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 $'SHARED_SECRETS=A\nMAP'; bad "mapped name collides with multiline shared secrets"
 reset; run_step "$V" "${valid_env[@]}" SECRET_BINDINGS=MAP=secret:1 REQUIRED_SECRETS=MAP; ok "required mapped name"
 reset; run_step "$V" "${valid_env[@]}" SCHEDULER_JOB=cron SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@other-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=https://svc.example; bad "OIDC service account other project"
 reset; run_step "$V" "${valid_env[@]}" SCHEDULER_JOB=cron SCHEDULER_OIDC_SERVICE_ACCOUNT=worker@test-proj.iam.gserviceaccount.com SCHEDULER_OIDC_AUDIENCE=http://svc.example; bad "OIDC audience HTTPS required"
@@ -355,7 +356,16 @@ reset
 put_secret mapped x
 run_step "$R" 'SECRET_BINDINGS=MAP=mapped:latest' FAKE_FAIL_VERSION=1
 bad "missing enabled latest version fails"
-has "$OUT" "MAP references mapped:latest, which has no enabled version"
+has "$OUT" "MAP references mapped:latest, which is missing or disabled"
+
+reset
+put_secret mapped x
+run_step "$R" $'SECRET_BINDINGS=OLDER=mapped:1\nMAP=mapped:latest' FAKE_VERSION_STATE=ENABLED FAKE_LATEST_STATE=DISABLED
+bad "disabled latest fails when an older version is enabled"
+has "$OUT" "MAP references mapped:latest, which is missing or disabled"
+has "$(calls)" "secrets versions describe 1 --secret=mapped"
+has "$(calls)" "secrets versions describe latest --secret=mapped"
+hasnt "$(calls)" "secrets versions list"
 
 reset
 put_secret P__A x; put_secret S x
@@ -586,11 +596,12 @@ bad "pause and delete failure"
 has "$OUT" "::warning::could not delete svc-cron; delete it by hand before re-running: gcloud scheduler jobs delete svc-cron --location=europe-west3 --project=test-proj"
 
 # An update never pauses or resumes, even when create-paused is set.
-reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"; : > "$fake/scheduler/svc-cron"
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"; printf 'prior OIDC auth\n' > "$fake/scheduler/svc-cron"
 run_step "$J" "${sched_env[@]}" SCHEDULER_CREATE_PAUSED=true SCHEDULER_PATH=/other
 ok "scheduler update"
 update="$(line_with 'scheduler jobs update http svc-cron')"
 has "$update" "--uri=https://svc-abc-ew.a.run.app/other"
+has "$update" "--clear-auth-token"
 has "$update" "--update-headers=X-Cron-Secret=cron-secret"
 [ "$(count_calls 'scheduler jobs create')" = "0" ] || fail "existing job is not recreated"
 [ "$(count_calls 'scheduler jobs pause')" = "0" ] || fail "update must not pause"
