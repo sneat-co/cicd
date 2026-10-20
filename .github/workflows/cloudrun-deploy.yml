@@ -1043,10 +1043,12 @@ jobs:
               --oidc-token-audience="${SCHEDULER_OIDC_AUDIENCE}"
             )
           fi
+          # OIDC mode owns the custom-header map; this workflow has no
+          # custom-header input, so clear legacy headers before attaching OIDC.
           if gcloud scheduler jobs describe "${CRON_JOB}" --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" >/dev/null 2>&1; then
             if [ "${#OIDC_ARGS[@]}" -gt 0 ]; then
               gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
-                --remove-headers=X-Cron-Secret "${OIDC_ARGS[@]}"
+                --clear-headers "${OIDC_ARGS[@]}"
             else
               gcloud scheduler jobs update http "${CRON_JOB}" "${CRON_ARGS[@]}" \
                 --clear-auth-token --update-headers="X-Cron-Secret=${CRON_SWEEP_SECRET}"
@@ -1069,7 +1071,7 @@ jobs:
             if [ "${#OIDC_ARGS[@]}" -gt 0 ]; then
               gcloud scheduler jobs update http "${CRON_JOB}" \
                 --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \
-                --remove-headers=X-Cron-Secret "${OIDC_ARGS[@]}" || discard_job
+                --clear-headers "${OIDC_ARGS[@]}" || discard_job
             else
               gcloud scheduler jobs update http "${CRON_JOB}" \
                 --location="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" \

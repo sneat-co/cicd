@@ -82,7 +82,14 @@ case "$1 $2 $3" in
   "scheduler jobs create") : > "$d/scheduler/$5" ;;
   "scheduler jobs pause") [ -z "${FAKE_FAIL_PAUSE:-}" ] || exit 1 ;;
   "scheduler jobs update")
-    case "$*" in *--update-headers=*|*--oidc-service-account-email=*) [ -z "${FAKE_FAIL_HEADER:-}" ] || exit 1 ;; esac ;;
+    case "$*" in
+      *--remove-headers=*)
+        # The installed gcloud SDK serializes removed header values as null;
+        # the provider retains the key, so OIDC transitions must clear headers.
+        exit 2
+        ;;
+    esac
+    case "$*" in *--clear-headers*|*--update-headers=*|*--oidc-service-account-email=*) [ -z "${FAKE_FAIL_HEADER:-}" ] || exit 1 ;; esac ;;
   "scheduler jobs delete")
     [ -z "${FAKE_FAIL_DELETE:-}" ] || exit 1
     rm -f "$d/scheduler/$4" ;;
@@ -621,9 +628,9 @@ reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"; : > "$fake/sch
 run_step "$J" "${sched_env[@]}" "${oidc_env[@]}" SCHEDULER_CREATE_PAUSED=true
 ok "OIDC scheduler update"
 update="$(line_with 'scheduler jobs update http svc-cron')"
-has "$update" "--remove-headers=X-Cron-Secret"
+has "$update" "--clear-headers"
 has "$update" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
-hasnt "$update" "--update-headers"
+hasnt "$update" "--remove-headers"
 hasnt "$(calls)" "cron-secret"
 [ "$(count_calls 'scheduler jobs pause')" = "0" ] || fail "OIDC update must preserve state"
 
@@ -636,8 +643,9 @@ hasnt "$create" "oidc"
 hasnt "$create" "headers"
 [ "$(sed -n 3p <<< "$sched_calls")" = "gcloud scheduler jobs pause svc-cron --location=europe-west3 --project=test-proj" ] || fail "OIDC pause happens before auth"
 update="$(sed -n 4p <<< "$sched_calls")"
-has "$update" "--remove-headers=X-Cron-Secret"
+has "$update" "--clear-headers"
 has "$update" "--oidc-service-account-email=worker@test-proj.iam.gserviceaccount.com --oidc-token-audience=https://svc.example/cron"
+hasnt "$update" "--remove-headers"
 hasnt "$update" "cron-secret"
 
 reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
