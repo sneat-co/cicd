@@ -1,0 +1,56 @@
+name: Renovate Copilot fix
+description: >-
+  When CI fails on a Renovate pull request, asks the Copilot coding agent to fix
+  the branch by mentioning it on the pull request. Meant for a caller workflow
+  triggered by `workflow_run` (type completed) of the repository's pull_request
+  workflows, plus `workflow_dispatch` with a `pr` input for a manual sweep.
+  Guards: Renovate-authored pull request with a same-repository head, the failed
+  run is for the current head commit, one request per head commit, at most
+  `max-attempts` requests per dependency version (then the label
+  `renovate-needs-human`). Nothing is checked out and no pull request code runs.
+  Without `copilot-trigger-token` it reports what it would request and changes
+  nothing. Needs `actions: read`, `contents: read`, `issues: write` and
+  `pull-requests: read` in the caller.
+
+inputs:
+  copilot-trigger-token:
+    description: >-
+      Fine-grained personal access token of a user with a Copilot seat, scoped
+      to the repository with Pull requests: read and write (pass
+      `secrets.COPILOT_TRIGGER_TOKEN`). Copilot only acts on mentions from such
+      a user. Used only to post the request comment.
+    required: false
+    default: ""
+  check-hint:
+    description: >-
+      The command(s) Copilot is told to run before pushing, for example
+      `go vet ./... && go test ./...`.
+    required: false
+    default: "the repository's own build and test commands"
+  max-attempts:
+    description: Copilot requests allowed per dependency version before the pull request is labelled `renovate-needs-human`.
+    required: false
+    default: "2"
+  pr:
+    description: >-
+      Manual runs: a Renovate pull request number (pass `inputs.pr`). Empty
+      sweeps every open Renovate pull request that has a failing pull_request run.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Ask Copilot to fix failing Renovate pull requests
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        COPILOT_TRIGGER_TOKEN: ${{ inputs.copilot-trigger-token }}
+        REPO: ${{ github.repository }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        CHECK_HINT: ${{ inputs.check-hint }}
+        RUN_ID: ${{ github.event.workflow_run.id }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        INPUT_PR: ${{ inputs.pr }}
+      run: bash "$GITHUB_ACTION_PATH/renovate-copilot-fix.sh"

@@ -37,6 +37,9 @@ jobs:
       - name: Run cloudrun-deploy workflow tests
         run: tests/test-cloudrun-deploy.sh
 
+      - name: Run renovate-copilot-fix tests
+        run: actions/renovate-copilot-fix/renovate-copilot-fix.test.sh
+
   go:
     name: Go CI
     uses: ./.github/workflows/go-ci.yml

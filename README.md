@@ -73,6 +73,72 @@ a few lines long and upgrades happen once.
 | `setup-pnpm-node` | Install pnpm + Node with pnpm-store cache and a frozen-lockfile install. The pnpm version comes from `packageManager` in the root `package.json`, else the `working-directory` one, else the `pnpm-version` input. The install step sets `PNPM_CONFIG_PM_ON_FAIL=ignore` so nested installs of GitHub-pinned dependencies (which pin their own `packageManager`) do not fail trying to switch pnpm versions. Used by `nx-ci.yml`, `playwright-e2e.yml`, `playwright-artifact-e2e.yml` and `cf-deploy.yml`. |
 | `check-peer-ranges` | Fail (or, by default, warn) when a `@sneat/*`/`@sneat-team/*` package declares a bare `^0.0.x`/`~0.0.x` `peerDependencies` range. Used by `nx-ci.yml`; standalone via `node actions/check-peer-ranges/check.mjs [directory]`. |
 | `go-module-tags` | Validate `{dir, version}` pairs against each module's `go.mod`, then create and push idempotent annotated `<dir>/v<version>` tags. Used by `go-module-tags.yml`; standalone via `GO_MODULE_TAGS_MODULES=... GITHUB_REPOSITORY=... actions/go-module-tags/tag-modules.sh`. |
+| `renovate-copilot-fix` | When CI fails on a Renovate pull request, comment a mention of the Copilot coding agent so it pushes a fix. One request per head commit, `max-attempts` per dependency version, then the label `renovate-needs-human`. See [Renovate Copilot fix](#renovate-copilot-fix-actionsrenovate-copilot-fix). Offline test: `actions/renovate-copilot-fix/renovate-copilot-fix.test.sh`. |
+
+## Renovate Copilot fix (`actions/renovate-copilot-fix`)
+
+Event-driven (no schedule): a caller workflow runs the action after a failed
+`pull_request` run on a `renovate/*` branch. The action posts a Copilot mention
+with the failing jobs, using `COPILOT_TRIGGER_TOKEN` (a fine-grained PAT of a user
+with a Copilot seat, Pull requests: read and write, kept as an org Actions secret;
+a fine-grained token covers one owner, so each org needs its own token and secret)
+for that one comment only. Every read uses the workflow token, no pull request code
+is checked out, and without the secret it only reports what it would request.
+
+Caller `.github/workflows/renovate-copilot-fix.yml` (list every workflow of the
+repository that runs on `pull_request`, except this one, under `workflows`):
+
+```yaml
+name: Renovate Copilot fix
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Renovate pull request number (empty = every open Renovate pull request with a failing pull_request run)
+        type: string
+        default: ''
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: renovate-copilot-fix-${{ github.event.workflow_run.head_branch || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  request-fix:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion == 'failure' &&
+       startsWith(github.event.workflow_run.head_branch, 'renovate/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: sneat-co/cicd/actions/renovate-copilot-fix@main
+        with:
+          copilot-trigger-token: ${{ secrets.COPILOT_TRIGGER_TOKEN }}
+          check-hint: go vet ./... && go test ./...
+          pr: ${{ inputs.pr }}
+```
+
+Inputs: `copilot-trigger-token`, `check-hint` (what Copilot should run before
+pushing; default "the repository's own build and test commands"), `max-attempts`
+(default `2`), `pr` (manual runs: one pull request number; empty sweeps every open
+Renovate pull request whose newest `pull_request` run of any workflow failed).
+
+Limits: only `pull_request` runs are handled (a Renovate pull request that fails
+only in a merge queue gets no request), and once Copilot commits to a Renovate
+branch Renovate stops rebasing it. Copilot's pushes wait for "Approve and run
+workflows" unless the repository's Settings > Copilot > cloud agent > "Require
+approval for workflow runs" is off.
 
 ## Cloud Run deploy (`cloudrun-deploy.yml`)
 
