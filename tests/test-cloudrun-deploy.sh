@@ -261,6 +261,22 @@ ok "newline value"
 has "$OUT" "· B: new version added"
 [ "$(wc -c < "$fake/secrets/B" | tr -d ' ')" = "2" ] || fail "trailing newline kept"
 
+# A multi-line value that ends in a newline (a PEM key) is unchanged when the
+# stored latest version holds the same bytes: no version is added.
+reset
+printf '%s\n' '-----BEGIN KEY-----' 'abc' '-----END KEY-----' > "$fake/secrets/PEM"
+run_step "$S" OWNED_SECRETS="PEM" 'ALL_SECRETS_JSON={"PEM":"-----BEGIN KEY-----\nabc\n-----END KEY-----\n"}'
+ok "pem value"
+has "$OUT" "· PEM: unchanged"
+hasnt "$(calls)" "versions add PEM"
+
+# Differing only by the trailing newline is still a change.
+reset
+printf '%s\n' '-----BEGIN KEY-----' 'abc' '-----END KEY-----' > "$fake/secrets/PEM"
+run_step "$S" OWNED_SECRETS="PEM" 'ALL_SECRETS_JSON={"PEM":"-----BEGIN KEY-----\nabc\n-----END KEY-----"}'
+ok "pem value without trailing newline"
+has "$OUT" "· PEM: new version added"
+
 # With a prefix, only the owned secrets are written, under the prefixed name.
 reset
 run_step "$S" SECRET_PREFIX=P__ OWNED_SECRETS="A" SHARED_SECRETS="S" 'ALL_SECRETS_JSON={"A":"a-val","S":"s-val"}'

@@ -661,6 +661,9 @@ jobs:
             project_number="$(gcloud projects describe "$project" --format='value(projectNumber)')"
             runtime_sa="${project_number}-compute@developer.gserviceaccount.com"
           fi
+          digest() {
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
+          }
           sync_secret() {
             local name="$1"
             local sm="${SECRET_PREFIX}${name}"
@@ -695,9 +698,13 @@ jobs:
                 return 0
               fi
             fi
-            local current
-            current="$(gcloud secrets versions access latest --secret="$sm" --project="$project" 2>/dev/null || true)"
-            if [ "$current" = "$value" ]; then
+            # Compare digests of the raw bytes. Capturing either side in $(...)
+            # strips trailing newlines, so a PEM key (which ends in one) would
+            # never match its stored copy and gain a version on every deploy.
+            local current_digest value_digest
+            current_digest="$(gcloud secrets versions access latest --secret="$sm" --project="$project" 2>/dev/null | digest || true)"
+            value_digest="$(printf '%s' "$value" | digest)"
+            if [ "$current_digest" = "$value_digest" ]; then
               echo "· ${label}: unchanged"
             elif printf '%s' "$value" | gcloud secrets versions add "$sm" --data-file=- --project="$project" >/dev/null 2>&1; then
               echo "· ${label}: new version added"
