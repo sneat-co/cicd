@@ -417,8 +417,9 @@ repository credential mode. With `private_go_dependencies: true`, overlapping
 Sneat namespace or exact DataTug backend/Core routes are rejected rather than
 silently retaining another credential for the same recipient. Legacy-only
 callers retain their existing behavior. The new helper appends process Git
-configuration without overwriting legacy routes; exact-only mode clears ambient
-helper fallback. Dedicated token/list files are runner-temporary mode600 and are
+configuration without overwriting declared built-in legacy routes; exact-only
+mode clears ambient helper fallback even when process configuration already has
+entries, preserving unrelated entries and restoring the original count on cleanup. Dedicated token/list files are runner-temporary mode600 and are
 removed with helper registration after source build, including failure paths.
 No dedicated token value or digest enters logs, artifacts, runtime secret sync
 or deployment authority. Publish and pin this provider before wiring a caller;

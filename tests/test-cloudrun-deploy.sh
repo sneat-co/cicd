@@ -165,6 +165,7 @@ R="Remove exact source repository credentials"
 [ "$(cond "$E")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != ''" ] || fail "exact validation must include keyless source dry-run and skip artifacts"
 [ "$(cond "$C")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'" ] || fail "exact secret resolution must be real source only"
 [ "$(cond "$R")" = 'always()' ] || fail "exact credential cleanup must run after build failures"
+[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.PRIVATE_GO_DEPENDENCIES' "$workflow")" = '${{ inputs.private_go_dependencies }}' ] || fail "exact reset must use declared built-in legacy mode"
 [ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.EXACT_REPOSITORY_TOKEN' "$workflow")" = '${{ secrets[inputs.goprivate_git_repository_token_secret] }}' ] || fail "dedicated inherited secret binding"
 
 reset; run_step "$E"; ok "legacy-only exact configuration absent"
@@ -201,7 +202,7 @@ credential_output() (
 )
 reset; : > "$work/gh_env"
 run_step 'Configure private Go dependency credentials' BACKEND_DEPENDENCY_TOKEN=DATATUG_SYNTHETIC SNEAT_DEPENDENCY_TOKEN=SNEAT_SYNTHETIC; ok "existing legacy helper configuration"
-run_step "$C" EXACT_REPOSITORIES='github.com/new-owner/private-module,ghe.example.com/team/module' EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC GIT_CONFIG_COUNT=3; ok "append exact helper without overwriting existing routes"
+run_step "$C" EXACT_REPOSITORIES='github.com/new-owner/private-module,ghe.example.com/team/module' EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC GIT_CONFIG_COUNT=3 PRIVATE_GO_DEPENDENCIES=true; ok "append exact helper without overwriting existing routes"
 hasnt "$(cat "$work/gh_env")" EXACT_SYNTHETIC
 for path in new-owner/private-module new-owner/private-module.git; do
   has "$(credential_output https github.com "$path")" 'password=EXACT_SYNTHETIC'
@@ -232,6 +233,25 @@ run_step "$C" EXACT_REPOSITORIES=github.com/new-owner/private-module EXACT_REPOS
 has "$(credential_output https github.com new-owner/private-module)" 'password=EXACT_SYNTHETIC'
 [ -z "$(credential_output https github.com unrelated/repository)" ] || fail "exact-only helper became host-wide"
 run_step "$R"; ok "exact-only cleanup"
+
+# Nonzero process config is not proof that the reviewed legacy mode is enabled.
+reset
+cat > "$work/gh_env" <<'AMBIENT_ENV'
+GIT_CONFIG_COUNT=2
+GIT_CONFIG_KEY_0=core.quotePath
+GIT_CONFIG_VALUE_0=false
+GIT_CONFIG_KEY_1=credential.helper
+GIT_CONFIG_VALUE_1<<AMBIENT_HELPER
+!f() { printf 'username=synthetic\npassword=AMBIENT_SYNTHETIC\n'; }; f
+AMBIENT_HELPER
+AMBIENT_ENV
+run_step "$C" EXACT_REPOSITORIES=github.com/new-owner/private-module EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC GIT_CONFIG_COUNT=2 PRIVATE_GO_DEPENDENCIES=false; ok "exact-only setup with ambient process helper"
+has "$(credential_output https github.com new-owner/private-module)" 'password=EXACT_SYNTHETIC'
+[ -z "$(credential_output https github.com new-owner/private-module/child)" ] || fail "exact-only retained ambient helper for child"
+[ "$(export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; load_git_env; git config --get core.quotePath)" = false ] || fail "exact-only overwrote unrelated process config"
+run_step "$R"; ok "exact-only cleanup restores nonzero original config"
+has "$(credential_output https github.com new-owner/private-module/child)" 'password=AMBIENT_SYNTHETIC'
+[ "$(export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; load_git_env; git config --get core.quotePath)" = false ] || fail "cleanup overwrote unrelated process config"
 
 # --- Validate deploy inputs ---------------------------------------------------
 

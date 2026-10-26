@@ -675,6 +675,7 @@ jobs:
         if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'
         env:
           EXACT_REPOSITORIES: ${{ steps.exact_go.outputs.repositories }}
+          PRIVATE_GO_DEPENDENCIES: ${{ inputs.private_go_dependencies }}
           EXACT_REPOSITORY_TOKEN: ${{ secrets[inputs.goprivate_git_repository_token_secret] }}
         run: |
           set -euo pipefail
@@ -716,9 +717,10 @@ jobs:
           done < "${RUNNER_TEMP}/exact-go-dependencies/repositories"
           HELPER
           chmod 700 "$dir/helper"
-          # Append to existing process-only Git configuration without replacing
-          # its legacy helper. Exact-only mode clears ambient helper fallback.
-          if [ "$count" = 0 ]; then
+          # Preserve only the declared built-in legacy mode's helper. A nonzero
+          # ambient process config count does not establish that mode. Append a
+          # reset in exact-only mode while retaining unrelated config entries.
+          if [ "${PRIVATE_GO_DEPENDENCIES:-false}" != true ]; then
             printf 'GIT_CONFIG_KEY_%s=credential.helper\nGIT_CONFIG_VALUE_%s=\n' "$count" "$count" >> "$GITHUB_ENV"
             count=$((count + 1))
           fi
