@@ -392,3 +392,34 @@ the Build step, for authenticated release downloads and provenance verification;
 the App installation must already allow both permissions. Publication and
 Cloudflare deployment credentials remain separate. With no App inputs, the
 existing `build-github-auth` behavior is unchanged.
+
+
+### Dedicated private Go repository access for source builds
+
+`cloudrun-deploy.yml` accepts optional `goprivate_git_repositories` (comma/newline
+canonical `host/owner/repository`) and `goprivate_git_repository_token_secret`
+(the name of an inherited GitHub secret). Supply both or neither. Call with
+`secrets: inherit`; no new secret value is declared, minted or copied by this
+configuration. Use a dedicated contents-read token restricted to the selected
+repositories, and include those module paths in the caller's `goprivate`.
+
+The named secret is resolved only for a real source build (`ci_run_id` empty,
+nonempty `go_build_cmd`, and not `dry_run`). It must be present before source
+fetch/build; missing credentials never borrow the Sneat token or DataTug App
+token. Dry-run checks the nonsecret list/name configuration only and does not
+prove credential availability or repository access. Artifact promotion skips
+this source credential path.
+
+Only HTTPS exact repository paths or optional terminal `.git` receive the token;
+children, siblings, foreign hosts, malformed paths and other protocols do not.
+The syntax and case-insensitive overlap contract follows `strongo/cicd`'s exact
+repository credential mode. With `private_go_dependencies: true`, overlapping
+Sneat namespace or exact DataTug backend/Core routes are rejected rather than
+silently retaining another credential for the same recipient. Legacy-only
+callers retain their existing behavior. The new helper appends process Git
+configuration without overwriting legacy routes; exact-only mode clears ambient
+helper fallback. Dedicated token/list files are runner-temporary mode600 and are
+removed with helper registration after source build, including failure paths.
+No dedicated token value or digest enters logs, artifacts, runtime secret sync
+or deployment authority. Publish and pin this provider before wiring a caller;
+this is not proof that a real source deploy has succeeded.

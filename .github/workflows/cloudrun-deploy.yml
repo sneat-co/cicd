@@ -89,6 +89,16 @@ on:
         type: string
         required: false
         default: ""
+      goprivate_git_repositories:
+        description: Optional comma/newline canonical host/owner/repository recipients for a dedicated source-build read credential.
+        type: string
+        required: false
+        default: ""
+      goprivate_git_repository_token_secret:
+        description: Name of an inherited secret used only for the exact source-build repositories; required together with goprivate_git_repositories.
+        type: string
+        required: false
+        default: ""
       private_go_dependencies:
         description: >-
           Mint the SneatReleaser App token and configure process-only Git
@@ -486,6 +496,89 @@ jobs:
           test "${actual%% *}" = "$expected"
           install -m 0755 "$ARTIFACT_DIR/$BINARY_NAME" "./$BINARY_NAME"
 
+      - name: Validate exact source repository configuration
+        id: exact_go
+        if: inputs.ci_run_id == '' && inputs.go_build_cmd != ''
+        env:
+          PRIVATE_GIT_REPOSITORIES: ${{ inputs.goprivate_git_repositories }}
+          PRIVATE_GIT_REPOSITORY_SECRET: ${{ inputs.goprivate_git_repository_token_secret }}
+          PRIVATE_GO_DEPENDENCIES: ${{ inputs.private_go_dependencies }}
+        run: |
+          set -euo pipefail
+          repositories="${PRIVATE_GIT_REPOSITORIES:-}"
+          secret_name="${PRIVATE_GIT_REPOSITORY_SECRET:-}"
+          if [ -z "$repositories" ] && [ -z "$secret_name" ]; then exit 0; fi
+          if [ -z "$repositories" ] || [ -z "$secret_name" ]; then
+            echo "::error title=Incomplete exact repository credentials::Set both goprivate_git_repositories and goprivate_git_repository_token_secret."
+            exit 1
+          fi
+          if ! [[ "$secret_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "::error title=Invalid dedicated secret name::Use an inherited GitHub secret name, not a value or expression."
+            exit 1
+          fi
+          valid_host() {
+            local label
+            [[ "$1" =~ ^[a-z0-9.-]+$ ]] && [[ "$1" != .* && "$1" != *. && "$1" != *..* ]] || return 1
+            local labels
+            IFS='.' read -r -a labels <<< "$1"
+            for label in "${labels[@]}"; do
+              [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+            done
+          }
+          valid_route() {
+            local host="${1%%/*}" part
+            [[ "$1" == */* && "$1" != */ && "$1" != *//* ]] && valid_host "$host" || return 1
+            local parts
+            IFS='/' read -r -a parts <<< "${1#*/}"
+            for part in "${parts[@]}"; do
+              [[ "$part" =~ ^[A-Za-z0-9._-]+$ && "$part" != . && "$part" != .. ]] || return 1
+            done
+          }
+          exact=()
+          while IFS= read -r raw; do
+            repository="$(printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [ -z "$repository" ] && continue
+            repository_key="$(printf '%s' "$repository" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            if ! valid_route "$repository" || ! [[ "$repository" =~ ^[^/]+/[^/]+/[^/]+$ ]] || [[ "$repository_key" == *.git ]]; then
+              echo "::error title=Invalid exact repository::Use canonical host/owner/repository entries only; no URL, port, dot segment or child path."
+              exit 1
+            fi
+            exact+=("$repository")
+          done < <(printf '%s\n' "$repositories" | tr ',' '\n')
+          if [ "${#exact[@]}" = 0 ]; then
+            echo "::error title=Missing exact repository::At least one canonical repository is required."
+            exit 1
+          fi
+          PRIVATE_GIT_HOSTS=""
+          if [ "${PRIVATE_GO_DEPENDENCIES:-false}" = true ]; then
+            PRIVATE_GIT_HOSTS='github.com/sneat-co,github.com/sneat-dev,github.com/datatug/backend,github.com/datatug/datatug-core'
+          fi
+          while IFS= read -r raw; do
+            prefix="$(printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [ -z "$prefix" ] && continue
+            if ! valid_route "$prefix"; then
+              echo "::error title=Unsafe mixed credential scope::Legacy prefixes must be canonical host/owner paths in exact repository mode."
+              exit 1
+            fi
+            prefix_key="$(printf '%s' "$prefix" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            for repository in "${exact[@]}"; do
+              for target in "$repository" "$repository.git"; do
+                target_key="$(printf '%s' "$target" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+                case "$prefix_key" in "$target_key"|"$target_key"/*)
+                  echo "::error title=Overlapping credential scopes::Exact repositories must not overlap the enabled built-in Sneat or DataTug credential routes."
+                  exit 1 ;;
+                esac
+                case "$target_key" in "$prefix_key"|"$prefix_key"/*)
+                  echo "::error title=Overlapping credential scopes::Exact repositories must not overlap the enabled built-in Sneat or DataTug credential routes."
+                  exit 1 ;;
+                esac
+              done
+            done
+          done < <(printf '%s\n' "${PRIVATE_GIT_HOSTS:-}" | tr ',' '\n')
+          printf 'configured=true\n' >> "$GITHUB_OUTPUT"
+          printf 'repositories=%s\n' "$(IFS=,; printf '%s' "${exact[*]}")" >> "$GITHUB_OUTPUT"
+          echo "Exact repository configuration validated; credential presence and access are not proved by dry-run validation."
+
       - name: Set up Go for source build
         if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
         uses: actions/setup-go@v7
@@ -578,6 +671,64 @@ jobs:
           PRIVATE_GO_HELPER
           ENV
 
+      - name: Configure exact source repository credentials
+        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'
+        env:
+          EXACT_REPOSITORIES: ${{ steps.exact_go.outputs.repositories }}
+          EXACT_REPOSITORY_TOKEN: ${{ secrets[inputs.goprivate_git_repository_token_secret] }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXACT_REPOSITORY_TOKEN" ]; then
+            echo "::error title=Missing exact repository credential::The named inherited secret must be available for a real source build; no other credential is borrowed."
+            exit 1
+          fi
+          count="${GIT_CONFIG_COUNT:-0}"
+          [[ "$count" =~ ^[0-9]+$ ]] || exit 1
+          dir="${RUNNER_TEMP}/exact-go-dependencies"
+          umask 077
+          mkdir -p "$dir"
+          chmod 700 "$dir"
+          printf '%s\n' "$count" > "$dir/base-count"
+          printf '%s\n' "$EXACT_REPOSITORY_TOKEN" > "$dir/token"
+          printf '%s\n' "$EXACT_REPOSITORIES" | tr ',' '\n' > "$dir/repositories"
+          chmod 600 "$dir/base-count" "$dir/token" "$dir/repositories"
+          cat > "$dir/helper" <<'HELPER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          [ "${1:-}" = get ] || exit 0
+          protocol= host= path=
+          protocol_seen=0 host_seen=0 path_seen=0
+          while IFS='=' read -r key value; do
+            case "$key" in
+              protocol) [ "$protocol_seen" = 0 ] || exit 0; protocol_seen=1; protocol="$value" ;;
+              host) [ "$host_seen" = 0 ] || exit 0; host_seen=1; host="$value" ;;
+              path) [ "$path_seen" = 0 ] || exit 0; path_seen=1; path="$value" ;;
+            esac
+          done
+          [ "$protocol" = https ] || exit 0
+          while IFS= read -r repository; do
+            case "$host/$path" in
+              "$repository"|"$repository.git")
+                printf 'username=x-access-token\npassword='
+                cat "${RUNNER_TEMP}/exact-go-dependencies/token"
+                exit 0 ;;
+            esac
+          done < "${RUNNER_TEMP}/exact-go-dependencies/repositories"
+          HELPER
+          chmod 700 "$dir/helper"
+          # Append to existing process-only Git configuration without replacing
+          # its legacy helper. Exact-only mode clears ambient helper fallback.
+          if [ "$count" = 0 ]; then
+            printf 'GIT_CONFIG_KEY_%s=credential.helper\nGIT_CONFIG_VALUE_%s=\n' "$count" "$count" >> "$GITHUB_ENV"
+            count=$((count + 1))
+          fi
+          while IFS= read -r repository; do
+            printf 'GIT_CONFIG_KEY_%s=credential.https://%s.useHttpPath\nGIT_CONFIG_VALUE_%s=true\n' "$count" "${repository%%/*}" "$count" >> "$GITHUB_ENV"
+            count=$((count + 1))
+          done < "$dir/repositories"
+          printf 'GIT_CONFIG_KEY_%s=credential.helper\nGIT_CONFIG_VALUE_%s=%s/helper\n' "$count" "$count" "$dir" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_COUNT=%s\n' "$((count + 1))" >> "$GITHUB_ENV"
+
       - name: Build binary from source
         if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
         env:
@@ -589,6 +740,19 @@ jobs:
         run: |
           set -euo pipefail
           bash -euo pipefail -c "$BUILD_CMD"
+
+      - name: Remove exact source repository credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/exact-go-dependencies"
+          if [ -f "$dir/base-count" ]; then
+            count="$(cat "$dir/base-count")"
+            [[ "$count" =~ ^[0-9]+$ ]] || exit 1
+            printf 'GIT_CONFIG_COUNT=%s\n' "$count" >> "$GITHUB_ENV"
+          fi
+          rm -f "$dir/token" "$dir/repositories" "$dir/helper" "$dir/base-count"
+          if [ -d "$dir" ]; then rmdir "$dir"; fi
 
       - id: auth
         name: Authenticate with Google Cloud

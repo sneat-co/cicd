@@ -158,6 +158,81 @@ cond() { yq -r ".jobs.deploy.steps[] | select(.name == \"$1\") | .if" "$workflow
 [ "$(cond 'Build binary from source')" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run" ] || fail "source build condition"
 [ "$(cond 'Mint private Go dependency token')" = "inputs.private_go_dependencies && !inputs.dry_run" ] || fail "private Go dependency condition"
 
+# --- Exact source-build repository credentials (synthetic keys only) -----------
+E="Validate exact source repository configuration"
+C="Configure exact source repository credentials"
+R="Remove exact source repository credentials"
+[ "$(cond "$E")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != ''" ] || fail "exact validation must include keyless source dry-run and skip artifacts"
+[ "$(cond "$C")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'" ] || fail "exact secret resolution must be real source only"
+[ "$(cond "$R")" = 'always()' ] || fail "exact credential cleanup must run after build failures"
+[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.EXACT_REPOSITORY_TOKEN' "$workflow")" = '${{ secrets[inputs.goprivate_git_repository_token_secret] }}' ] || fail "dedicated inherited secret binding"
+
+reset; run_step "$E"; ok "legacy-only exact configuration absent"
+reset; run_step "$E" PRIVATE_GIT_REPOSITORIES=github.com/new-owner/private-module; bad "exact list without secret name"
+reset; run_step "$E" PRIVATE_GIT_REPOSITORY_SECRET=READ_MODULE; bad "secret name without exact list"
+reset; run_step "$E" PRIVATE_GIT_REPOSITORIES=github.com/new-owner/private-module PRIVATE_GIT_REPOSITORY_SECRET='not/a/name'; bad "invalid inherited secret name"
+for repository in github.com github.com/owner https://github.com/owner/repo github.com:443/owner/repo github.com/owner/repo/child github.com/owner/repo.git github.com/owner/repo.GIT github.com/../repo github.com/owner/repo?query github.com/owner/repo/; do
+  reset; run_step "$E" PRIVATE_GIT_REPOSITORIES="$repository" PRIVATE_GIT_REPOSITORY_SECRET=READ_MODULE; bad "invalid exact repository $repository"
+done
+for repository in github.com/SNEAT-CO/private-module github.com/sneat-dev/private-module github.com/DATATUG/BACKEND github.com/datatug/backend.git/child github.com/datatug/datatug-core; do
+  reset; run_step "$E" PRIVATE_GIT_REPOSITORIES="$repository" PRIVATE_GIT_REPOSITORY_SECRET=READ_MODULE PRIVATE_GO_DEPENDENCIES=true; bad "overlapping legacy or App route $repository"
+done
+reset; run_step "$E" PRIVATE_GIT_REPOSITORIES=github.com/new-owner/private-module PRIVATE_GIT_REPOSITORY_SECRET=READ_MODULE PRIVATE_GO_DEPENDENCIES=true DRY_RUN=true; ok "keyless dry-run validates syntax"
+has "$OUT" "access are not proved"
+[ ! -e "$rt/exact-go-dependencies/token" ] || fail "dry validation created a credential"
+reset; run_step "$C" EXACT_REPOSITORIES=github.com/new-owner/private-module EXACT_REPOSITORY_TOKEN= SNEAT_DEPENDENCY_TOKEN=LEGACY_SYNTHETIC; bad "actual source missing dedicated credential cannot borrow legacy"
+
+# Parse the real process-only GITHUB_ENV protocol without evaluating its values.
+load_git_env() {
+  local line key end value
+  while IFS= read -r line; do
+    if [[ "$line" == *'<<'* ]]; then
+      key="${line%%<<*}"; end="${line#*<<}"; value=""
+      while IFS= read -r line && [ "$line" != "$end" ]; do value+="$line"$'\n'; done
+      value="${value%$'\n'}"
+      export "$key=$value"
+    else export "$line"; fi
+  done < "$work/gh_env"
+}
+credential_output() (
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 RUNNER_TEMP="$rt"
+  load_git_env
+  printf 'protocol=%s\nhost=%s\npath=%s\n\n' "$1" "$2" "$3" | git credential fill 2>/dev/null || true
+)
+reset; : > "$work/gh_env"
+run_step 'Configure private Go dependency credentials' BACKEND_DEPENDENCY_TOKEN=DATATUG_SYNTHETIC SNEAT_DEPENDENCY_TOKEN=SNEAT_SYNTHETIC; ok "existing legacy helper configuration"
+run_step "$C" EXACT_REPOSITORIES='github.com/new-owner/private-module,ghe.example.com/team/module' EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC GIT_CONFIG_COUNT=3; ok "append exact helper without overwriting existing routes"
+hasnt "$(cat "$work/gh_env")" EXACT_SYNTHETIC
+for path in new-owner/private-module new-owner/private-module.git; do
+  has "$(credential_output https github.com "$path")" 'password=EXACT_SYNTHETIC'
+done
+has "$(credential_output https ghe.example.com team/module.git)" 'password=EXACT_SYNTHETIC'
+has "$(credential_output https github.com sneat-co/existing)" 'password=SNEAT_SYNTHETIC'
+has "$(credential_output https github.com sneat-dev/existing)" 'password=SNEAT_SYNTHETIC'
+has "$(credential_output https github.com datatug/backend)" 'password=DATATUG_SYNTHETIC'
+has "$(credential_output https github.com datatug/datatug-core.git)" 'password=DATATUG_SYNTHETIC'
+for path in new-owner/private-module/child new-owner/private-module.git/child new-owner/private-module-suffix new-owner/private-module.git.evil new-owner/sibling NEW-OWNER/private-module new-owner/private-module/../sibling; do
+  [ -z "$(credential_output https github.com "$path")" ] || fail "foreign exact recipient $path got credentials"
+done
+[ -z "$(credential_output http github.com new-owner/private-module)" ] || fail "HTTP obtained credential"
+[ -z "$(credential_output https github.com.evil new-owner/private-module)" ] || fail "foreign host obtained credential"
+python3 - "$rt/exact-go-dependencies" <<'PY_PERMISSIONS'
+import os,sys
+for name in ('token','repositories','base-count'):
+    assert os.stat(os.path.join(sys.argv[1],name)).st_mode & 0o777 == 0o600
+assert os.stat(os.path.join(sys.argv[1],'helper')).st_mode & 0o777 == 0o700
+PY_PERMISSIONS
+run_step "$R"; ok "always cleanup restores prior process helper count"
+[ ! -e "$rt/exact-go-dependencies" ] || fail "dedicated credential files retained"
+[ -z "$(credential_output https github.com new-owner/private-module)" ] || fail "exact credential survived cleanup"
+has "$(credential_output https github.com sneat-co/existing)" 'password=SNEAT_SYNTHETIC'
+# Exact-only mode clears ambient helpers and still never borrows a legacy token.
+reset; : > "$work/gh_env"
+run_step "$C" EXACT_REPOSITORIES=github.com/new-owner/private-module EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC; ok "exact-only setup"
+has "$(credential_output https github.com new-owner/private-module)" 'password=EXACT_SYNTHETIC'
+[ -z "$(credential_output https github.com unrelated/repository)" ] || fail "exact-only helper became host-wide"
+run_step "$R"; ok "exact-only cleanup"
+
 # --- Validate deploy inputs ---------------------------------------------------
 
 V="Validate deploy inputs"
