@@ -53,7 +53,13 @@ source filenames/hashes out of public cicd. Illustrative schema only:
 
 Classes: `secured-factory`, `deliberate-native-owner`, `read-only-native-owner`,
 `test-only`. The last requires `_test.go`; it does not imply emulator execution.
-Rows need owner/rationale and GitHub review/test references. No wildcard paths,
+Rows need owner/rationale, a review reference and a GitHub source-test reference.
+A review reference may be a GitHub URL or `sha256:<64 lowercase hex characters>`
+identifying an immutable private WB review artifact. The artifact must exist in
+the private WB receipt and its contents and exact-head binding must be independently
+verified outside CI. The checker validates only the reference shape; it does not
+read the private artifact or treat a digest as approval. Do not publish private
+review paths/content or fabricate a URL to satisfy the schema. No wildcard paths,
 duplicate/stale rows or blanket test exemptions. An explicitly empty sites array
 permits a Go repository with no classified imports; a missing repository fails.
 

@@ -332,3 +332,30 @@ func TestCentralParserAcceptsTargetGo127AndNestedOlderModules(t *testing.T) {
 	write(t, root, "backend/source.go", "package backend\n")
 	verify(t, root, policy(), "")
 }
+
+func TestPrivateReviewArtifactDigestIsAReferenceNotApproval(t *testing.T) {
+	root := fixture(t)
+	write(t, root, "owner.go", "package x\nimport _ \"cloud.google.com/go/firestore\"\n")
+	s := approved(t, root, "owner.go", "cloud.google.com/go/firestore", "deliberate-native-owner")
+	s.Review = "sha256:" + strings.Repeat("a", 64)
+	data, _ := json.Marshal(policy(s))
+	m, err := loadManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify(t, root, m, "")
+	// The checker neither opens a private artifact nor infers that it was approved.
+	for _, bad := range []string{"", "sha256:", "sha256:" + strings.Repeat("a", 63), "sha256:" + strings.Repeat("a", 65), "sha256:" + strings.Repeat("g", 64), "sha256:" + strings.Repeat("A", 64), "sha256:../private/review.md", "../private/review.md", "file:///private/review.md"} {
+		v := s
+		v.Review = bad
+		b, _ := json.Marshal(policy(v))
+		if _, err := loadManifest(b); err == nil {
+			t.Errorf("invalid review reference accepted: %q", bad)
+		}
+	}
+	s.Test = "sha256:" + strings.Repeat("a", 64)
+	data, _ = json.Marshal(policy(s))
+	if _, err := loadManifest(data); err == nil {
+		t.Fatal("artifact digest must not replace GitHub source-test reference")
+	}
+}

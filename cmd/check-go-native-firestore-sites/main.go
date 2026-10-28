@@ -100,6 +100,14 @@ func uniqueJSON(d *json.Decoder) error {
 	_, err = d.Token()
 	return err
 }
+
+// A digest identifies a private WB artifact without disclosing its path/content.
+// Presence, independent review and exact-head binding are verified outside CI.
+func reviewReference(ref string) bool {
+	return strings.HasPrefix(ref, "https://github.com/") ||
+		(strings.HasPrefix(ref, "sha256:") && digest.MatchString(strings.TrimPrefix(ref, "sha256:")))
+}
+
 func loadManifest(data []byte) (manifest, error) {
 	var m manifest
 	d := json.NewDecoder(bytes.NewReader(data))
@@ -137,8 +145,8 @@ func loadManifest(data []byte) (manifest, error) {
 			if s.Class == "test-only" && !strings.HasSuffix(s.File, "_test.go") {
 				return m, fmt.Errorf("test-only must name a test file: %s", s.File)
 			}
-			if strings.TrimSpace(s.Owner) == "" || strings.TrimSpace(s.Rationale) == "" || !strings.HasPrefix(s.Review, "https://github.com/") || !strings.HasPrefix(s.Test, "https://github.com/") {
-				return m, fmt.Errorf("site %s requires owner, rationale, GitHub review and test references", s.File)
+			if strings.TrimSpace(s.Owner) == "" || strings.TrimSpace(s.Rationale) == "" || !reviewReference(s.Review) || !strings.HasPrefix(s.Test, "https://github.com/") {
+				return m, fmt.Errorf("site %s requires owner, rationale, review URL or artifact digest, and GitHub test reference", s.File)
 			}
 			key := s.File + "\x00" + s.Import
 			if seen[key] {
