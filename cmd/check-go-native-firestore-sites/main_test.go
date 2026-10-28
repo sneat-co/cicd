@@ -277,3 +277,58 @@ func TestStaleRemovedImportAndVendorExclusion(t *testing.T) {
 	write(t, root, "vendor/native.go", "package x\nimport _ \"cloud.google.com/go/firestore\"\n")
 	verify(t, root, policy(), "")
 }
+
+func TestDocumentLinksAreAllowedButUnscannedSourceLinksFail(t *testing.T) {
+	for _, kind := range []string{"document", "external-document", "directory", "broken", "loop", "source-target", "module-target"} {
+		t.Run(kind, func(t *testing.T) {
+			root := fixture(t)
+			write(t, root, "instructions.md", "# Working agreements\n")
+			target := "instructions.md"
+			switch kind {
+			case "external-document":
+				dir := t.TempDir()
+				target = filepath.Join(dir, "notes.md")
+				if err := os.WriteFile(target, []byte("# Notes\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				target = "untracked-source"
+				if err := os.Mkdir(filepath.Join(root, target), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, target, "main.go"), []byte("package hidden\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "broken":
+				target = "missing.md"
+			case "loop":
+				target = "AGENTS.md"
+			case "source-target":
+				target = "main.go"
+			case "module-target":
+				write(t, root, "go.mod", "module example/module\n")
+				target = "go.mod"
+			}
+			if err := os.Symlink(target, filepath.Join(root, "AGENTS.md")); err != nil {
+				t.Fatal(err)
+			}
+			git(t, root, "add", "AGENTS.md")
+			_, err := check(root, repo, policy())
+			allowed := kind == "document" || kind == "external-document"
+			if allowed && err != nil {
+				t.Fatal(err)
+			}
+			if !allowed && err == nil {
+				t.Fatal("unscanned source link passed")
+			}
+		})
+	}
+}
+func TestCentralParserAcceptsTargetGo127AndNestedOlderModules(t *testing.T) {
+	root := fixture(t)
+	write(t, root, "go.mod", "module example/product\n\ngo 1.27.3\n")
+	write(t, root, "new.go", "package main\ntype Alias[T any] = []T\nfunc generic[T any](v T) T { return v }\n")
+	write(t, root, "backend/go.mod", "module example/product/backend\n\ngo 1.26.0\n")
+	write(t, root, "backend/source.go", "package backend\n")
+	verify(t, root, policy(), "")
+}

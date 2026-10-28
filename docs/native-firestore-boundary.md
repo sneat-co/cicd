@@ -3,7 +3,9 @@
 The opt-in job in `go-storage-driver-boundary.yml` checks every Git-tracked Go
 file, including tests, generated source, build-tag/OS files and nested modules.
 It does not build the target or download its module graph. Full parsing, missing
-source, symlinks and submodules fail closed. Actual `vendor` dependency trees
+source, source/directory/broken symlinks and submodules fail closed. A non-Go
+link resolving to a regular non-source file (such as an instruction document) is
+permitted. Actual `vendor` dependency trees
 are excluded; dot/underscore and testdata directories are scanned. Untracked
 files are outside the check: CI must use its clean checked-out commit.
 
@@ -79,3 +81,10 @@ existing capability-passing interfaces, unchanged approved bugs, dynamic calls,
 REST/net/http, other languages/scripts, unknown SDK forks, administrative clients
 and undiscovered writers remain outside its proof. Retain mandatory runtime
 policy, independent owner tests and daily root detection.
+
+The checker compiles in the central module (`go 1.26.0`, toolchain `go1.27.0`),
+independently of the target modules. Parser fixtures include target Go 1.27.3
+and generic type aliases. Patch releases do not add Go language syntax. Target
+syntax newer than the central parser can support fails as a parse error; update
+the central toolchain before adopting such a language version rather than
+silently omitting those files. This is lexical parsing, not target type-checking.

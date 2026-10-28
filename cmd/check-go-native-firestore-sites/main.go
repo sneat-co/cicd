@@ -149,6 +149,31 @@ func loadManifest(data []byte) (manifest, error) {
 	}
 	return m, nil
 }
+
+// Document links do not add executable source. Directory, broken and source
+// links fail closed because their contents are not enumerated by the Git index.
+func validateNonSourceLink(root, name string) error {
+	source := func(path string) bool {
+		base := filepath.Base(path)
+		return strings.EqualFold(filepath.Ext(path), ".go") || base == "go.mod" || base == "go.work"
+	}
+	if source(name) {
+		return fmt.Errorf("source symlink requires separate coverage: %s", name)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(name)))
+	if err != nil {
+		return fmt.Errorf("unresolved symlink %s: %w", name, err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return fmt.Errorf("stat symlink target %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() || source(real) {
+		return fmt.Errorf("symlink target is not a regular non-source file: %s", name)
+	}
+	return nil
+}
+
 func check(root, repo string, m manifest) ([]string, error) {
 	r, ok := m.Repositories[repo]
 	if !ok {
@@ -195,7 +220,10 @@ func check(root, repo string, m manifest) ([]string, error) {
 			return nil, fmt.Errorf("submodule requires separate coverage: %s", name)
 		}
 		if meta[0] == "120000" {
-			return nil, fmt.Errorf("tracked symlink requires separate coverage: %s", name)
+			if err := validateNonSourceLink(root, name); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if !strings.HasSuffix(name, ".go") || strings.Contains("/"+name, "/vendor/") {
 			continue
