@@ -28,6 +28,21 @@ on:
         type: string
         required: false
         default: main
+      native-sites:
+        description: Check repository-wide classified native Firestore import sites
+        type: boolean
+        required: false
+        default: false
+      native-sites-manifest:
+        description: Tracked manifest path relative to the target repository root
+        type: string
+        required: false
+        default: ""
+      native-sites-only:
+        description: Explicit native-owner adoption without claiming dependency-layer validation
+        type: boolean
+        required: false
+        default: false
       wb-version:
         description: Pinned WB CLI release to install.
         type: string
@@ -42,7 +57,30 @@ permissions:
   contents: read
 
 jobs:
+  options:
+    name: validate storage boundary options
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject incomplete or contradictory opt-in
+        env:
+          NATIVE_SITES: ${{ inputs.native-sites }}
+          NATIVE_ONLY: ${{ inputs.native-sites-only }}
+          MANIFEST: ${{ inputs.native-sites-manifest }}
+        run: |
+          set -euo pipefail
+          if [ "$NATIVE_SITES" = "true" ]; then
+            test -n "$MANIFEST" || { echo "::error::native-sites requires a manifest path"; exit 1; }
+          elif [ -n "$MANIFEST" ] || [ "$NATIVE_ONLY" = "true" ]; then
+            echo "::error::manifest and native-sites-only require native-sites=true"
+            exit 1
+          fi
+          if [ "$NATIVE_ONLY" = "true" ]; then
+            echo "::notice::Native-site consistency only: dependency-layer validation is NOT run. Do not remove an existing required dependency gate."
+          fi
+
   storage-boundary:
+    needs: options
+    if: ${{ !inputs.native-sites-only }}
     name: storage driver boundary (focused)
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -98,3 +136,43 @@ jobs:
           POLICY: ${{ steps.policy.outputs.reference }}
         run: |
           "$GITHUB_WORKSPACE/.cicd/scripts/check-go-storage-driver-boundary.sh" . "$POLICY"
+
+  native-sites:
+    name: native Firestore import-site consistency
+    needs: options
+    if: ${{ inputs.native-sites }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout target source
+        uses: actions/checkout@v6
+        with:
+          path: source
+          persist-credentials: false
+      - name: Checkout central boundary implementation
+        uses: actions/checkout@v6
+        with:
+          repository: sneat-co/cicd
+          ref: ${{ inputs.policy-ref }}
+          path: .cicd
+          persist-credentials: false
+      - name: Record exact implementation and target revisions
+        run: |
+          git -C .cicd rev-parse HEAD
+          git -C source rev-parse HEAD
+      - name: Set up checker Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: .cicd/go.mod
+          cache: false
+      - name: Build trusted checker without target dependencies
+        working-directory: .cicd
+        env:
+          GOWORK: 'off'
+        run: go build -mod=readonly -o "$RUNNER_TEMP/check-go-native-firestore-sites" ./cmd/check-go-native-firestore-sites
+      - name: Check native sites and record manifest digest
+        env:
+          MANIFEST: ${{ inputs.native-sites-manifest }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          "$RUNNER_TEMP/check-go-native-firestore-sites" --root "$GITHUB_WORKSPACE/source" --repository "$TARGET_REPOSITORY" --manifest "$MANIFEST"

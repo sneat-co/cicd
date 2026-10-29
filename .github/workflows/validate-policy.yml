@@ -18,13 +18,19 @@ name: Validate dependency policy
 on:
   push:
     branches: [main]
-    paths: ["policy/**"]
+    paths:
+      - "policy/**"
+      - "cmd/check-go-native-firestore-sites/**"
+      - ".github/workflows/go-storage-driver-boundary.yml"
+      - "tests/test-go-native-firestore-workflow.py"
   pull_request:
     paths:
       - "policy/**"
       - ".github/workflows/deps-policy.yml"
       - ".github/workflows/go-storage-driver-boundary.yml"
       - ".github/workflows/validate-policy.yml"
+      - "cmd/check-go-native-firestore-sites/**"
+      - "tests/test-go-native-firestore-workflow.py"
       - "scripts/check-go-storage-driver-boundary.sh"
       - "tests/test-extension-storage-boundary.sh"
       - "tests/test-go-storage-driver-boundary.sh"
@@ -87,3 +93,9 @@ jobs:
 
       - name: Test focused Go storage-driver boundary
         run: tests/test-go-storage-driver-boundary.sh
+
+      - name: Test native Firestore site consistency checker
+        run: go test ./cmd/check-go-native-firestore-sites
+
+      - name: Test native boundary workflow contract
+        run: python3 tests/test-go-native-firestore-workflow.py
