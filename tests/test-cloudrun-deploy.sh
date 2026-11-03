@@ -19,6 +19,9 @@ sandbox="$work/sandbox"
 mkdir -p "$fakebin" "$sandbox"
 
 SHA=0123456789abcdef0123456789abcdef01234567
+DIGEST="sha256:$(printf '%064d' 0)"
+IMAGE_REPO=europe-west3-docker.pkg.dev/test-proj/cloud-run/svc
+PREBUILT="$IMAGE_REPO@$DIGEST"
 OUT=""
 CODE=0
 checks=0
@@ -69,12 +72,19 @@ case "$1 $2 $3" in
   "projects get-iam-policy "*)
     [ -f "$d/project-policy.json" ] || exit 1
     cat "$d/project-policy.json" ;;
+  "artifacts docker images")
+    [ "$4" = describe ] || exit 1
+    [ -z "${FAKE_FAIL_IMAGE:-}" ] || exit 1
+    printf '%s\n' "${FAKE_IMAGE_DIGEST-${5##*@}}" ;;
+  "run revisions describe")
+    printf '%s\n' "${FAKE_RUNTIME_IMAGE-europe-west3-docker.pkg.dev/test-proj/cloud-run/svc@sha256:0000000000000000000000000000000000000000000000000000000000000000}" ;;
   "run services describe")
     case "$*" in
       *latestReadyRevisionName*) echo "rev-00001" ;;
       *) [ -f "$d/service_url" ] || exit 1; cat "$d/service_url" ;;
     esac ;;
   "run deploy "*)
+    printf '%s\0' "$@" > "$d/deploy-argv"
     [ -f "$d/service_url" ] || echo "https://svc-abc-ew.a.run.app" > "$d/service_url" ;;
   "run services add-iam-policy-binding")
     [ -z "${FAKE_FAIL_INVOKER:-}" ] || exit 1 ;;
@@ -132,7 +142,7 @@ run_step() {
     RUNNER_TEMP="$rt" GITHUB_OUTPUT="$work/gh_output" GITHUB_STEP_SUMMARY="$work/summary" \
     GITHUB_REPOSITORY=sneat-co/fixture GITHUB_ENV="$work/gh_env" \
     GCLOUD_PROJECT_ID=test-proj GCLOUD_REGION=europe-west3 SERVICE_NAME=svc DEPLOY_SHA="$SHA" \
-    DRY_RUN=false SECRET_PREFIX= OWNED_SECRETS= SHARED_SECRETS= REQUIRED_SECRETS= \
+    DRY_RUN=false REVISION_SUFFIX= PREBUILT_IMAGE= SECRET_PREFIX= OWNED_SECRETS= SHARED_SECRETS= REQUIRED_SECRETS= \
     ENV_FROM_SECRETS= SECRET_BINDINGS= ENV_VARS_INPUT= RUNTIME_SA= SCHEDULER_JOB= \
     SCHEDULER_OIDC_SERVICE_ACCOUNT= SCHEDULER_OIDC_AUDIENCE= \
     "$@" bash -e "$script" 2>&1)"
@@ -155,16 +165,53 @@ put_secret() { printf '%s' "$2" > "$fake/secrets/$1"; }
 cond() { yq -r ".jobs.deploy.steps[] | select(.name == \"$1\") | .if" "$workflow"; }
 [ "$(cond 'Configure Cloud Scheduler job')" = "inputs.scheduler_job != ''" ] || fail "scheduler step must run only when scheduler_job is set"
 [ "$(cond 'Configure Firestore expiry policies')" = "inputs.firestore_ttls != ''" ] || fail "ttl step must run only when firestore_ttls is set"
-[ "$(cond 'Build binary from source')" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run" ] || fail "source build condition"
-[ "$(cond 'Mint private Go dependency token')" = "inputs.private_go_dependencies && !inputs.dry_run" ] || fail "private Go dependency condition"
+[ "$(cond 'Build binary from source')" = "inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run" ] || fail "source build condition"
+[ "$(cond 'Mint private Go dependency token')" = "inputs.prebuilt_image == '' && inputs.private_go_dependencies && !inputs.dry_run" ] || fail "private Go dependency condition"
+[ "$(cond 'Verify canonical CI artifact source')" = "inputs.ci_run_id != ''" ] || fail "reuse must retain applicable source-event checks"
+[ "$(cond 'Check prebuilt image exists')" = "inputs.prebuilt_image != ''" ] || fail "immutable image existence check must include dry run"
+for step in 'Download validated binary' 'Verify validated binary'; do
+  [ "$(cond "$step")" = "inputs.prebuilt_image == '' && inputs.ci_run_id != ''" ] || fail "reuse must skip $step"
+done
+for step in 'Set up Go for source build' 'Build binary from source'; do
+  [ "$(cond "$step")" = "inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run" ] || fail "reuse must skip $step"
+done
+for step in 'Mint private Go dependency token' 'Configure private Go dependency credentials'; do
+  [ "$(cond "$step")" = "inputs.prebuilt_image == '' && inputs.private_go_dependencies && !inputs.dry_run" ] || fail "reuse must skip $step"
+done
+for step in 'Configure Docker for Artifact Registry' 'Build Docker image' 'Push Docker image'; do
+  [ "$(cond "$step")" = "inputs.prebuilt_image == ''" ] || fail "reuse must skip $step"
+done
+for step in 'Verify Cloud Run service and datastore health' 'Validate deployment'; do
+  [ "$(cond "$step")" = "\${{ !inputs.dry_run }}" ] || fail "reuse must retain $step"
+done
+[ "$(yq -r '.on.workflow_call.inputs.prebuilt_image.type' "$workflow")" = string ] || fail "prebuilt image must be a string"
+[ "$(yq -r '.on.workflow_call.inputs.prebuilt_image.required' "$workflow")" = false ] || fail "prebuilt image must be optional"
+[ "$(yq -r '.on.workflow_call.inputs.prebuilt_image.default' "$workflow")" = '' ] || fail "prebuilt image must default empty"
+[ "$(yq -r '.jobs.deploy.env.PREBUILT_IMAGE' "$workflow")" = "\${{ inputs.prebuilt_image }}" ] || fail "prebuilt image must enter shell through env"
+[ "$(cond 'Check deterministic revision service')" = "inputs.revision_suffix != ''" ] || fail "existing-service guard must be opt-in and include dry run"
+[ "$(yq -r '.on.workflow_call.inputs.revision_suffix.type' "$workflow")" = string ] || fail "revision suffix must be a string"
+[ "$(yq -r '.on.workflow_call.inputs.revision_suffix.required' "$workflow")" = false ] || fail "revision suffix must be optional"
+[ "$(yq -r '.on.workflow_call.inputs.revision_suffix.default' "$workflow")" = '' ] || fail "revision suffix must default empty"
+[ "$(yq -r '.jobs.deploy.env.REVISION_SUFFIX' "$workflow")" = "\${{ inputs.revision_suffix }}" ] || fail "revision suffix must enter shell through env"
+yq -o=json '.jobs.deploy.steps | map(.name)' "$workflow" | python3 -c '
+import json, sys
+names = json.load(sys.stdin)
+guard = names.index("Check deterministic revision service")
+assert names.index("Configure gcloud (preinstalled on runner)") < guard
+reuse = names.index("Check prebuilt image exists")
+assert names.index("Configure gcloud (preinstalled on runner)") < reuse
+for mutation in ("Sync tokens from GitHub secrets to Secret Manager", "Push Docker image", "Deploy to Cloud Run"):
+    assert guard < names.index(mutation), mutation
+    assert reuse < names.index(mutation), mutation
+'
 
 # --- Exact source-build repository credentials (synthetic keys only) -----------
 E="Validate exact source repository configuration"
 C="Configure exact source repository credentials"
 R="Remove exact source repository credentials"
-[ "$(cond "$E")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != ''" ] || fail "exact validation must include keyless source dry-run and skip artifacts"
-[ "$(cond "$C")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'" ] || fail "exact secret resolution must be real source only"
-[ "$(cond "$R")" = 'always()' ] || fail "exact credential cleanup must run after build failures"
+[ "$(cond "$E")" = "inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != ''" ] || fail "exact validation must include keyless source dry-run and skip artifacts and reuse"
+[ "$(cond "$C")" = "inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'" ] || fail "exact secret resolution must be real source only"
+[ "$(cond "$R")" = "always() && inputs.prebuilt_image == ''" ] || fail "exact credential cleanup must run after build failures and skip reuse"
 [ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.PRIVATE_GO_DEPENDENCIES' "$workflow")" = "\${{ inputs.private_go_dependencies }}" ] || fail "exact reset must use declared built-in legacy mode"
 [ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.EXACT_REPOSITORY_TOKEN' "$workflow")" = "\${{ secrets[inputs.goprivate_git_repository_token_secret] }}" ] || fail "dedicated inherited secret binding"
 
@@ -262,6 +309,52 @@ valid_env=(SCHEDULER_PATH=/v0/cron/sweep 'SCHEDULER_CRON=*/5 * * * *' SCHEDULER_
   DEPLOYER_SA=d@test-proj.iam.gserviceaccount.com)
 
 reset; run_step "$V" "${valid_env[@]}"; ok "defaults validate"
+# Validate the actual full revision name in real and dry-run modes. A suffix
+# may start with a digit or hyphen because the service supplies its prefix.
+for dry_run in false true; do
+  for suffix in v1 1 -canary a--b; do
+    reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" REVISION_SUFFIX="$suffix"; ok "valid revision suffix"
+  done
+  for suffix in Upper under_score path/name trailing- 'two words' $'line\nbreak' 'semi;colon' "\$(touch revision-injected)"; do
+    reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" REVISION_SUFFIX="$suffix"; bad "invalid revision suffix"
+    has "$OUT" "revision_suffix must contain lowercase letters"
+    [ ! -e "$sandbox/revision-injected" ] || fail "revision suffix executed shell content"
+    [ ! -s "$fake/calls.log" ] || fail "invalid suffix called gcloud"
+  done
+  suffix_59="$(printf '%059d' 0)"
+  reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" REVISION_SUFFIX="$suffix_59"; ok "full revision name at 63 characters"
+  reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" REVISION_SUFFIX="${suffix_59}0"; bad "full revision name at 64 characters"
+  has "$OUT" "at most 63 characters"
+done
+service_63="a$(printf '%062d' 0)"
+reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME="$service_63"; ok "empty suffix preserves existing service validation"
+reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME="$service_63" REVISION_SUFFIX=1; bad "service consumes suffix budget"
+for dry_run in false true; do
+  reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" PREBUILT_IMAGE="$PREBUILT" \
+    CI_RUN_ID=42 CI_ARTIFACT_NAME=artifact BINARY_NAME=app PRIVATE_GO_DEPENDENCIES=true BUILD_CMD='exit 99'; ok "reuse takes precedence over populated legacy build inputs"
+  reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" PREBUILT_IMAGE="$PREBUILT" \
+    SCHEDULER_JOB= SCHEDULER_CREATE_PAUSED=false SCHEDULER_OIDC_SERVICE_ACCOUNT= SCHEDULER_OIDC_AUDIENCE=; ok "final reuse can leave scheduler untouched"
+  for image in "$IMAGE_REPO:tag" "$IMAGE_REPO:tag@$DIGEST" "$IMAGE_REPO@$DIGEST:tag" \
+    "https://$PREBUILT" "$PREBUILT?query" "$PREBUILT#fragment" "$PREBUILT " \
+    "$PREBUILT"$'\n' "$IMAGE_REPO@sha256:ABCDEF" "$IMAGE_REPO@sha256:$(printf '%064d' 0 | tr 0 A)" \
+    "$IMAGE_REPO@sha256:$(printf '%063d' 0)" "$IMAGE_REPO@sha256:$(printf '%065d' 0)" \
+    "$IMAGE_REPO@sha256:\$(touch image-injected)"; do
+    reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" PREBUILT_IMAGE="$image"; bad "invalid immutable image reference"
+    has "$OUT" "prebuilt_image must be an untagged repository@sha256"
+    [ ! -s "$fake/calls.log" ] || fail "invalid image reached gcloud"
+    [ ! -e "$sandbox/image-injected" ] || fail "image input executed shell content"
+  done
+  for repository in europe-west1-docker.pkg.dev/test-proj/cloud-run/svc \
+    europe-west3-docker.pkg.dev/other-proj/cloud-run/svc "$IMAGE_REPO/extra"; do
+    reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" PREBUILT_IMAGE="$repository@$DIGEST"; bad "wrong expected repository"
+    has "$OUT" "exact expected image repository"
+    [ ! -s "$fake/calls.log" ] || fail "repository mismatch reached gcloud"
+  done
+  # Storage location can differ from the target service region, when the
+  # caller explicitly selects that same repository through the old input.
+  repository=europe-west1-docker.pkg.dev/test-proj/cloud-run/svc
+  reset; run_step "$V" "${valid_env[@]}" DRY_RUN="$dry_run" IMAGE="$repository" PREBUILT_IMAGE="$repository@$DIGEST"; ok "explicit cross-region repository reuse"
+done
 reset; run_step "$V" "${valid_env[@]}" SERVICE_NAME=games-cloud SECRET_PREFIX=GAMES_CLOUD__ \
   OWNED_SECRETS="A_ONE B_TWO" SHARED_SECRETS="C_THREE" REQUIRED_SECRETS="A_ONE" ENV_FROM_SECRETS=PAIR_MATCHING_GAME_SECRET \
   SCHEDULER_JOB=games-cron 'FIRESTORE_TTLS=sso-flows:expiresAt'; ok "full valid set"
@@ -555,6 +648,40 @@ has "$OUT" "serviceAccount:123456789-compute@developer.gserviceaccount.com"
 
 # --- Deploy ----------------------------------------------------------------------------
 
+P="Check prebuilt image exists"
+reset; run_step "$P" PREBUILT_IMAGE="$PREBUILT"; ok "authenticated immutable image exists"
+has "$OUT" "Prebuilt image exists: $PREBUILT"
+has "$OUT" "source origin must be authenticated by the trusted caller"
+has "$(calls)" "artifacts docker images describe $PREBUILT --project=test-proj --format=value(image_summary.digest)"
+[ "$(wc -l < "$fake/calls.log" | tr -d ' ')" = 1 ] || fail "image check mutated cloud resources"
+reset; run_step "$P" PREBUILT_IMAGE="$PREBUILT" FAKE_FAIL_IMAGE=1; bad "missing or unreadable image denies reuse"
+has "$OUT" "prebuilt_image is missing or unreadable"
+for digest in '' sha256:different; do
+  reset; run_step "$P" PREBUILT_IMAGE="$PREBUILT" FAKE_IMAGE_DIGEST="$digest"; bad "empty or different authenticated digest denies reuse"
+  has "$OUT" "different or empty prebuilt image digest"
+done
+reset; run_step "$P" PREBUILT_IMAGE="$PREBUILT" DRY_RUN=true FAKE_IMAGE_DIGEST=; ok "dry run makes no existence claim"
+has "$OUT" "registry existence and source origin are unverified"
+hasnt "$OUT" "Prebuilt image exists:"
+
+G="Check deterministic revision service"
+for dry_run in false true; do
+  reset
+  run_step "$G" DRY_RUN="$dry_run" REVISION_SUFFIX=planned-1
+  bad "deterministic naming rejects absent or unreadable service"
+  has "$OUT" "revision_suffix requires an existing service URL"
+  [ "$(count_calls 'run services describe')" = 1 ] || fail "guard must only read service"
+  [ "$(wc -l < "$fake/calls.log" | tr -d ' ')" = 1 ] || fail "guard mutated cloud resources"
+  reset
+  : > "$fake/service_url"
+  run_step "$G" DRY_RUN="$dry_run" REVISION_SUFFIX=planned-1
+  bad "deterministic naming rejects empty service URL"
+  reset
+  echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+  run_step "$G" DRY_RUN="$dry_run" REVISION_SUFFIX=planned-1
+  ok "deterministic naming accepts existing service"
+done
+
 D="Deploy to Cloud Run"
 IMG="europe-west3-docker.pkg.dev/test-proj/cloud-run/svc"
 deploy_env=(CRON_SWEEP_SECRET=cron-secret ENV_VARS_INPUT= IMAGE= MIN_INSTANCES=0 MAX_INSTANCES=2)
@@ -574,9 +701,49 @@ has "$deploy" "--platform=managed --region=europe-west3 --allow-unauthenticated 
 has "$deploy" "--set-env-vars=GOOGLE_CLOUD_PROJECT=test-proj,FIREBASE_PROJECT_ID=test-proj,CLOUD_TASKS_LOCATION=europe-west3,CLOUD_TASKS_INVOKER_SA=cloud-tasks-invoker@test-proj.iam.gserviceaccount.com,SNEAT_PLATFORM=cloudrun,FOO=bar --set-secrets=A=P__A:latest --set-secrets=S=S:latest --project=test-proj"
 hasnt "$deploy" "SNEAT_TASKS_BASE_URL"
 hasnt "$deploy" "--service-account"
+hasnt "$deploy" "--revision-suffix"
 has "$(calls)" "run services update svc --region=europe-west3 --update-env-vars=SNEAT_TASKS_BASE_URL=https://svc-abc-ew.a.run.app,CLOUD_TASKS_OIDC_AUDIENCE=https://svc-abc-ew.a.run.app --project=test-proj"
 has "$(calls)" "run services add-iam-policy-binding svc --region=europe-west3 --member=serviceAccount:cloud-tasks-invoker@test-proj.iam.gserviceaccount.com --role=roles/run.invoker --project=test-proj"
 has "$OUT" "Existing service URL: <none: first deploy>"
+
+# Opt-in deployment must retain the planned name, including if the service
+# disappeared after the earlier guard. Inspect the fake's real argv, not $*.
+reset; prep_deploy
+run_step "$D" "${deploy_env[@]}" REVISION_SUFFIX=planned-1
+bad "deterministic deployment cannot bootstrap a service"
+has "$OUT" "revision_suffix requires an existing service URL"
+hasnt "$(calls)" "run deploy"
+hasnt "$(calls)" "run services update"
+reset; prep_deploy
+echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$D" "${deploy_env[@]}" REVISION_SUFFIX=planned-1
+ok "deterministic steady-state deployment"
+revision_arg_count=0
+while IFS= read -r -d '' arg; do
+  case "$arg" in
+    --revision-suffix=*)
+      [ "$arg" = --revision-suffix=planned-1 ] || fail "revision flag lost its argument boundary"
+      revision_arg_count=$((revision_arg_count + 1)) ;;
+  esac
+done < "$fake/deploy-argv"
+[ "$revision_arg_count" = 1 ] || fail "deployment must pass exactly one revision suffix argument"
+hasnt "$(calls)" "run services update"
+
+reset; prep_deploy
+echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$D" "${deploy_env[@]}" PREBUILT_IMAGE="$PREBUILT" REVISION_SUFFIX=planned-1
+ok "reuse deploys the requested immutable image"
+image_arg_count=0
+while IFS= read -r -d '' arg; do
+  case "$arg" in
+    --image=*)
+      [ "$arg" = "--image=$PREBUILT" ] || fail "reuse changed the digest or its argument boundary"
+      image_arg_count=$((image_arg_count + 1)) ;;
+  esac
+done < "$fake/deploy-argv"
+[ "$image_arg_count" = 1 ] || fail "deployment must pass exactly one immutable image argument"
+hasnt "$(calls)" "$PREBUILT:$SHA"
+hasnt "$(calls)" "run services update"
 
 # Steady state: the URL is injected into the single revision, nothing is patched.
 reset; prep_deploy
@@ -795,6 +962,16 @@ has "$OUT" "Deployed revision: service=svc revision=rev-00001 commit=$SHA url=ht
 [ "$(cat "$work/gh_output")" = "service_url=https://svc-abc-ew.a.run.app
 revision=rev-00001" ] || fail "step outputs"
 has "$(cat "$work/summary")" "Deployed revision: service=svc revision=rev-00001"
+has "$OUT" "observed_image=$PREBUILT"
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$U" PREBUILT_IMAGE="$PREBUILT" FAKE_RUNTIME_IMAGE=actual-platform-image
+ok "reuse records actual image separately from requested and caller ref"
+has "$OUT" "requested_image=$PREBUILT observed_image=actual-platform-image caller_ref=$SHA"
+hasnt "$OUT" "commit=$SHA"
+has "$(cat "$work/summary")" 'Reused image deployment:'
+reset; echo "https://svc-abc-ew.a.run.app" > "$fake/service_url"
+run_step "$U" PREBUILT_IMAGE="$PREBUILT" FAKE_RUNTIME_IMAGE=
+bad "missing actual deployed image observation"
 
 # --- Health and validation -------------------------------------------------------------------------
 
@@ -944,7 +1121,7 @@ dry() { # dry "<step>" [VAR=value ...]: runs with the shims first on PATH and no
   set +e
   OUT="$(cd "$sandbox" && env -i PATH="$shim_dir:/usr/bin:/bin:/opt/homebrew/bin" HOME="$work" RUNNER_TEMP="$rt" \
     GITHUB_OUTPUT="$work/gh_output" GITHUB_STEP_SUMMARY="$work/summary" \
-    GCLOUD_PROJECT_ID=test-proj GCLOUD_REGION=europe-west3 SERVICE_NAME=svc DEPLOY_SHA="$SHA" DRY_RUN=true \
+    GCLOUD_PROJECT_ID=test-proj GCLOUD_REGION=europe-west3 SERVICE_NAME=svc DEPLOY_SHA="$SHA" DRY_RUN=true REVISION_SUFFIX= PREBUILT_IMAGE= \
     SECRET_PREFIX=P__ OWNED_SECRETS="A" SHARED_SECRETS="S" REQUIRED_SECRETS= SECRET_BINDINGS= ENV_VARS_INPUT= ENV_FROM_SECRETS=PLAIN RUNTIME_SA= SCHEDULER_JOB=svc-cron \
     SCHEDULER_OIDC_SERVICE_ACCOUNT= SCHEDULER_OIDC_AUDIENCE= \
     "$@" bash -e "$script" 2>&1)"
@@ -968,6 +1145,7 @@ dry "Dry-run plan" SERVICE_URL=https://svc-dry-run.a.run.app VALIDATE_PATH=/cicd
 plan="$(cat "$rt/dry-run-plan.log")"
 has "$plan" "docker build -t europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:$SHA -t europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:latest ."
 has "$plan" "gcloud run deploy svc --image=europe-west3-docker.pkg.dev/test-proj/cloud-run/svc:$SHA"
+hasnt "$plan" "--revision-suffix"
 has "$plan" "--set-secrets=A=P__A:latest --set-secrets=S=S:latest"
 has "$plan" "--set-secrets=MAP=explicit-secret:7"
 has "$plan" "gcloud scheduler jobs create http svc-cron"
@@ -982,5 +1160,22 @@ for leaked in super-secret-a plain-secret-value cron-secret-value; do
   hasnt "$plan" "$leaked"
   hasnt "$(cat "$work/summary")" "$leaked"
 done
+
+: > "$rt/dry-run-plan.log"
+dry "Check prebuilt image exists" PREBUILT_IMAGE="$PREBUILT"
+has "$OUT" "registry existence and source origin are unverified"
+dry "Check deterministic revision service" REVISION_SUFFIX=planned-1
+dry "Deploy to Cloud Run" PREBUILT_IMAGE="$PREBUILT" REVISION_SUFFIX=planned-1 CRON_SWEEP_SECRET=cron-secret-value IMAGE= MIN_INSTANCES=0 MAX_INSTANCES=2
+dry "Show service URL and revision" PREBUILT_IMAGE="$PREBUILT" REVISION_SUFFIX=planned-1
+has "$OUT" "revision=svc-planned-1 requested_image=$PREBUILT caller_ref=$SHA"
+has "$OUT" "deployed image and source origin are unverified"
+plan="$(cat "$rt/dry-run-plan.log")"
+has "$plan" "--revision-suffix=planned-1"
+has "$plan" "artifacts docker images describe $PREBUILT"
+has "$plan" "--image=$PREBUILT"
+hasnt "$plan" "$PREBUILT:$SHA"
+hasnt "$plan" "docker build"
+hasnt "$plan" "docker push"
+hasnt "$plan" "run services update"
 
 echo "OK: ${checks} cloudrun-deploy step runs passed"

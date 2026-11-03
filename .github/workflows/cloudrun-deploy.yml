@@ -57,6 +57,15 @@ on:
         description: Cloud Run service name
         type: string
         required: true
+      revision_suffix:
+        description: >-
+          Optional deterministic revision suffix for an existing service. The
+          full name `<service>-<suffix>` must contain only lowercase letters,
+          digits and hyphens, end in a letter or digit, and fit in 63 characters.
+          Empty preserves automatic naming and first-deploy URL bootstrapping.
+        type: string
+        required: false
+        default: ""
       region:
         description: Cloud Run, Scheduler and Artifact Registry region
         type: string
@@ -71,7 +80,19 @@ on:
         description: >-
           Image repository without a tag. Empty means
           `<region>-docker.pkg.dev/<project>/cloud-run/<service>`. The image is
-          pushed as `:<ref>` and `:latest` and the `:<ref>` tag is deployed.
+          pushed as `:<ref>` and `:latest` and the `:<ref>` tag is deployed,
+          unless prebuilt_image selects an existing digest in this repository.
+        type: string
+        required: false
+        default: ""
+      prebuilt_image:
+        description: >-
+          Optional existing immutable Artifact Registry image reference,
+          `<image repository>@sha256:<64 lowercase hex>`. Its repository must
+          exactly match image, or the default image repository when image is
+          empty. Skips all binary and image builds, artifact downloads and build
+          credentials. The trusted caller must authenticate its source origin;
+          this workflow checks registry existence, not source provenance.
         type: string
         required: false
         default: ""
@@ -80,7 +101,8 @@ on:
           Shell command that builds the service binary from source before the
           image build (run from the repository root; `$DEPLOY_SHA` is set).
           Empty means the Dockerfile needs no host build. Ignored when
-          `ci_run_id` is set, because the validated CI binary is used instead.
+          `ci_run_id` is set, because the validated CI binary is used instead,
+          or when prebuilt_image is set, because no build is performed.
         type: string
         required: false
         default: ""
@@ -292,6 +314,8 @@ jobs:
       GCLOUD_PROJECT_ID: ${{ inputs.project }}
       GCLOUD_REGION: ${{ inputs.region }}
       SERVICE_NAME: ${{ inputs.service }}
+      REVISION_SUFFIX: ${{ inputs.revision_suffix }}
+      PREBUILT_IMAGE: ${{ inputs.prebuilt_image }}
       # For a workflow_run caller, deploy exactly the commit whose CI succeeded.
       DEPLOY_SHA: ${{ inputs.ref || github.sha }}
       DRY_RUN: ${{ inputs.dry_run }}
@@ -314,6 +338,7 @@ jobs:
     steps:
       - name: Validate deploy inputs
         env:
+          IMAGE: ${{ inputs.image }}
           SCHEDULER_PATH: ${{ inputs.scheduler_path }}
           SCHEDULER_CRON: ${{ inputs.scheduler_cron }}
           SCHEDULER_CREATE_PAUSED: ${{ inputs.scheduler_create_paused }}
@@ -333,6 +358,15 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
           [[ "$SERVICE_NAME" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || fail "service must be a Cloud Run service name"
+          if [ -n "$REVISION_SUFFIX" ]; then
+            [[ "$REVISION_SUFFIX" =~ ^[-a-z0-9]*[a-z0-9]$ ]] || fail "revision_suffix must contain lowercase letters, digits or hyphens and end in a letter or digit"
+            [ "$((${#SERVICE_NAME} + 1 + ${#REVISION_SUFFIX}))" -le 63 ] || fail "service and revision_suffix must form a revision name of at most 63 characters"
+          fi
+          if [ -n "$PREBUILT_IMAGE" ]; then
+            [[ "$PREBUILT_IMAGE" =~ ^[a-z0-9]+([.-][a-z0-9]+)*(/[a-z0-9]+([._-]+[a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] || fail "prebuilt_image must be an untagged repository@sha256 followed by 64 lowercase hex characters"
+            expected_image="${IMAGE:-${GCLOUD_REGION}-docker.pkg.dev/${GCLOUD_PROJECT_ID}/cloud-run/${SERVICE_NAME}}"
+            [ "${PREBUILT_IMAGE%@sha256:*}" = "$expected_image" ] || fail "prebuilt_image must use the exact expected image repository"
+          fi
           [[ "$GCLOUD_PROJECT_ID" =~ ^[a-z][-a-z0-9]{4,28}[a-z0-9]$ ]] || fail "project must be a Google Cloud project id"
           [[ "$GCLOUD_REGION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]] || fail "region must look like europe-west3"
           [[ "$SECRET_PREFIX" =~ ^[A-Za-z0-9_-]*$ ]] || fail "secret_prefix may only contain letters, digits, '_' and '-'"
@@ -465,7 +499,7 @@ jobs:
       # cross-run "latest" lookup. A source build (no ci_run_id) has no CI-run
       # artifact and builds from its checked-out source instead.
       - name: Download validated binary
-        if: inputs.ci_run_id != ''
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id != ''
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.ci_artifact_name }}
@@ -476,7 +510,7 @@ jobs:
       # Never extract a cross-run artifact into the checkout: it could replace a
       # local credential action. Promote only the verified binary.
       - name: Verify validated binary
-        if: inputs.ci_run_id != ''
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id != ''
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/validated-${{ inputs.binary_name }}-${{ inputs.ci_run_id }}
           BINARY_NAME: ${{ inputs.binary_name }}
@@ -498,7 +532,7 @@ jobs:
 
       - name: Validate exact source repository configuration
         id: exact_go
-        if: inputs.ci_run_id == '' && inputs.go_build_cmd != ''
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != ''
         env:
           PRIVATE_GIT_REPOSITORIES: ${{ inputs.goprivate_git_repositories }}
           PRIVATE_GIT_REPOSITORY_SECRET: ${{ inputs.goprivate_git_repository_token_secret }}
@@ -580,7 +614,7 @@ jobs:
           echo "Exact repository configuration validated; credential presence and access are not proved by dry-run validation."
 
       - name: Set up Go for source build
-        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -628,7 +662,7 @@ jobs:
 
       - name: Mint private Go dependency token
         id: private_go
-        if: inputs.private_go_dependencies && !inputs.dry_run
+        if: inputs.prebuilt_image == '' && inputs.private_go_dependencies && !inputs.dry_run
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: Iv23li26w131Kv6u3IdM
@@ -638,7 +672,7 @@ jobs:
           permission-contents: read
 
       - name: Configure private Go dependency credentials
-        if: inputs.private_go_dependencies && !inputs.dry_run
+        if: inputs.prebuilt_image == '' && inputs.private_go_dependencies && !inputs.dry_run
         env:
           BACKEND_DEPENDENCY_TOKEN: ${{ steps.private_go.outputs.token }}
           SNEAT_DEPENDENCY_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
@@ -672,7 +706,7 @@ jobs:
           ENV
 
       - name: Configure exact source repository credentials
-        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'
         env:
           EXACT_REPOSITORIES: ${{ steps.exact_go.outputs.repositories }}
           PRIVATE_GO_DEPENDENCIES: ${{ inputs.private_go_dependencies }}
@@ -732,7 +766,7 @@ jobs:
           printf 'GIT_CONFIG_COUNT=%s\n' "$((count + 1))" >> "$GITHUB_ENV"
 
       - name: Build binary from source
-        if: inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
+        if: inputs.prebuilt_image == '' && inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run
         env:
           # The default GITHUB_TOKEN only grants access to this repo, so other
           # private sneat-co modules need the org-wide CI token.
@@ -744,7 +778,7 @@ jobs:
           bash -euo pipefail -c "$BUILD_CMD"
 
       - name: Remove exact source repository credentials
-        if: always()
+        if: always() && inputs.prebuilt_image == ''
         run: |
           set -euo pipefail
           dir="${RUNNER_TEMP}/exact-go-dependencies"
@@ -776,6 +810,37 @@ jobs:
         run: |
           gcloud auth login --brief --cred-file="${CREDENTIALS_FILE}"
           gcloud config set project "${GCLOUD_PROJECT_ID}"
+
+      - name: Check prebuilt image exists
+        if: inputs.prebuilt_image != ''
+        run: |
+          set -euo pipefail
+          if ! digest="$(gcloud artifacts docker images describe "$PREBUILT_IMAGE" \
+            --project="$GCLOUD_PROJECT_ID" --format='value(image_summary.digest)')"; then
+            echo "::error::prebuilt_image is missing or unreadable in Artifact Registry"
+            exit 1
+          fi
+          if [ "$DRY_RUN" = true ]; then
+            echo "[dry-run] Requested prebuilt image: ${PREBUILT_IMAGE}; registry existence and source origin are unverified"
+          elif [ "$digest" != "${PREBUILT_IMAGE##*@}" ]; then
+            echo "::error::Artifact Registry returned a different or empty prebuilt image digest"
+            exit 1
+          else
+            echo "Prebuilt image exists: ${PREBUILT_IMAGE}; source origin must be authenticated by the trusted caller"
+          fi
+
+      # First-deploy URL bootstrapping creates a second revision. Require a
+      # stable existing URL before any cloud resource mutation in opt-in mode.
+      - name: Check deterministic revision service
+        if: inputs.revision_suffix != ''
+        run: |
+          set -euo pipefail
+          if ! existing_url="$(gcloud run services describe "$SERVICE_NAME" \
+            --region="$GCLOUD_REGION" --project="$GCLOUD_PROJECT_ID" \
+            --format='value(status.url)')" || [ -z "$existing_url" ]; then
+            echo "::error::revision_suffix requires an existing service URL; first-deploy URL bootstrapping creates another revision"
+            exit 1
+          fi
 
       # Propagate secrets from GitHub secrets -> Secret Manager, so GitHub is the
       # single source of truth and the runtime picks them up via the
@@ -909,9 +974,11 @@ jobs:
           done
 
       - name: Configure Docker for Artifact Registry
+        if: inputs.prebuilt_image == ''
         run: gcloud auth configure-docker "${GCLOUD_REGION}-docker.pkg.dev"
 
       - name: Build Docker image
+        if: inputs.prebuilt_image == ''
         env:
           IMAGE: ${{ inputs.image }}
         run: |
@@ -923,6 +990,7 @@ jobs:
             .
 
       - name: Push Docker image
+        if: inputs.prebuilt_image == ''
         env:
           IMAGE: ${{ inputs.image }}
         run: |
@@ -1083,6 +1151,10 @@ jobs:
             --project="${GCLOUD_PROJECT_ID}" \
             --format='value(status.url)' 2>/dev/null || true)
           echo "Existing service URL: ${EXISTING_URL:-<none: first deploy>}"
+          if [ -n "$REVISION_SUFFIX" ] && [ -z "$EXISTING_URL" ]; then
+            echo "::error::revision_suffix requires an existing service URL; first-deploy URL bootstrapping creates another revision"
+            exit 1
+          fi
 
           # Environment list: the platform values, then the caller's, then the
           # secret-derived plain values, then the service URL pair. A later entry
@@ -1139,9 +1211,14 @@ jobs:
           if [ -n "${RUNTIME_SA}" ]; then
             SA_FLAGS=(--service-account="${RUNTIME_SA}")
           fi
+          REVISION_FLAGS=()
+          if [ -n "$REVISION_SUFFIX" ]; then
+            REVISION_FLAGS=("--revision-suffix=${REVISION_SUFFIX}")
+          fi
+          image_ref="${PREBUILT_IMAGE:-${image}:${DEPLOY_SHA}}"
 
           gcloud run deploy "${SERVICE_NAME}" \
-            --image="${image}:${DEPLOY_SHA}" \
+            --image="$image_ref" \
             --platform=managed \
             --region="${GCLOUD_REGION}" \
             --allow-unauthenticated \
@@ -1151,6 +1228,7 @@ jobs:
             --cpu=1 \
             --timeout=300 \
             --set-env-vars="${ENV_VARS}" \
+            ${REVISION_FLAGS[@]+"${REVISION_FLAGS[@]}"} \
             ${SA_FLAGS[@]+"${SA_FLAGS[@]}"} \
             ${SECRET_FLAGS[@]+"${SECRET_FLAGS[@]}"} \
             --project="${GCLOUD_PROJECT_ID}"
@@ -1285,14 +1363,24 @@ jobs:
           SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --region="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --format='value(status.url)')
           REVISION=$(gcloud run services describe "${SERVICE_NAME}" --region="${GCLOUD_REGION}" --project="${GCLOUD_PROJECT_ID}" --format='value(status.latestReadyRevisionName)')
           echo "Service deployed to: ${SERVICE_URL}"
-          # The revision line ties a running revision to the commit it was built from.
-          echo "Deployed revision: service=${SERVICE_NAME} revision=${REVISION} commit=${DEPLOY_SHA} url=${SERVICE_URL}"
+          if [ "$DRY_RUN" = true ]; then
+            observation="[dry-run] Planned revision: service=${SERVICE_NAME} revision=${SERVICE_NAME}-${REVISION_SUFFIX:-<server-assigned>} requested_image=${PREBUILT_IMAGE:-<build from caller ref>} caller_ref=${DEPLOY_SHA}; deployed image and source origin are unverified"
+          else
+            observed_image="$(gcloud run revisions describe "$REVISION" --region="$GCLOUD_REGION" --project="$GCLOUD_PROJECT_ID" --format='value(status.imageDigest)')"
+            [ -n "$observed_image" ] || { echo "::error::Cloud Run returned no deployed revision image"; exit 1; }
+            if [ -n "$PREBUILT_IMAGE" ]; then
+              observation="Reused image deployment: service=${SERVICE_NAME} revision=${REVISION} requested_image=${PREBUILT_IMAGE} observed_image=${observed_image} caller_ref=${DEPLOY_SHA} url=${SERVICE_URL}; source origin is supplied by the trusted caller"
+            else
+              observation="Deployed revision: service=${SERVICE_NAME} revision=${REVISION} commit=${DEPLOY_SHA} url=${SERVICE_URL} observed_image=${observed_image}"
+            fi
+          fi
+          echo "$observation"
           {
             echo "service_url=${SERVICE_URL}"
             echo "revision=${REVISION}"
           } >> "$GITHUB_OUTPUT"
           if [ "${DRY_RUN}" != "true" ]; then
-            echo "Deployed revision: service=${SERVICE_NAME} revision=${REVISION} commit=${DEPLOY_SHA} url=${SERVICE_URL}" >> "$GITHUB_STEP_SUMMARY"
+            echo "$observation" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # This is deliberately a real service/data-store probe, rather than a
