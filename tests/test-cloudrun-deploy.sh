@@ -165,8 +165,8 @@ R="Remove exact source repository credentials"
 [ "$(cond "$E")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != ''" ] || fail "exact validation must include keyless source dry-run and skip artifacts"
 [ "$(cond "$C")" = "inputs.ci_run_id == '' && inputs.go_build_cmd != '' && !inputs.dry_run && steps.exact_go.outputs.configured == 'true'" ] || fail "exact secret resolution must be real source only"
 [ "$(cond "$R")" = 'always()' ] || fail "exact credential cleanup must run after build failures"
-[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.PRIVATE_GO_DEPENDENCIES' "$workflow")" = '${{ inputs.private_go_dependencies }}' ] || fail "exact reset must use declared built-in legacy mode"
-[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.EXACT_REPOSITORY_TOKEN' "$workflow")" = '${{ secrets[inputs.goprivate_git_repository_token_secret] }}' ] || fail "dedicated inherited secret binding"
+[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.PRIVATE_GO_DEPENDENCIES' "$workflow")" = "\${{ inputs.private_go_dependencies }}" ] || fail "exact reset must use declared built-in legacy mode"
+[ "$(yq -r '.jobs.deploy.steps[] | select(.name == "Configure exact source repository credentials") | .env.EXACT_REPOSITORY_TOKEN' "$workflow")" = "\${{ secrets[inputs.goprivate_git_repository_token_secret] }}" ] || fail "dedicated inherited secret binding"
 
 reset; run_step "$E"; ok "legacy-only exact configuration absent"
 reset; run_step "$E" PRIVATE_GIT_REPOSITORIES=github.com/new-owner/private-module; bad "exact list without secret name"
@@ -192,13 +192,13 @@ load_git_env() {
       while IFS= read -r line && [ "$line" != "$end" ]; do value+="$line"$'\n'; done
       value="${value%$'\n'}"
       export "$key=$value"
-    else export "$line"; fi
+    else export "${line?}"; fi
   done < "$work/gh_env"
 }
 credential_output() (
-  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 RUNNER_TEMP="$rt"
+  export RUNNER_TEMP="$rt"
   load_git_env
-  printf 'protocol=%s\nhost=%s\npath=%s\n\n' "$1" "$2" "$3" | git credential fill 2>/dev/null || true
+  printf 'protocol=%s\nhost=%s\npath=%s\n\n' "$1" "$2" "$3" | env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null || true
 )
 reset; : > "$work/gh_env"
 run_step 'Configure private Go dependency credentials' BACKEND_DEPENDENCY_TOKEN=DATATUG_SYNTHETIC SNEAT_DEPENDENCY_TOKEN=SNEAT_SYNTHETIC; ok "existing legacy helper configuration"
@@ -248,10 +248,10 @@ AMBIENT_ENV
 run_step "$C" EXACT_REPOSITORIES=github.com/new-owner/private-module EXACT_REPOSITORY_TOKEN=EXACT_SYNTHETIC GIT_CONFIG_COUNT=2 PRIVATE_GO_DEPENDENCIES=false; ok "exact-only setup with ambient process helper"
 has "$(credential_output https github.com new-owner/private-module)" 'password=EXACT_SYNTHETIC'
 [ -z "$(credential_output https github.com new-owner/private-module/child)" ] || fail "exact-only retained ambient helper for child"
-[ "$(export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; load_git_env; git config --get core.quotePath)" = false ] || fail "exact-only overwrote unrelated process config"
+[ "$(load_git_env; env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git config --get core.quotePath)" = false ] || fail "exact-only overwrote unrelated process config"
 run_step "$R"; ok "exact-only cleanup restores nonzero original config"
 has "$(credential_output https github.com new-owner/private-module/child)" 'password=AMBIENT_SYNTHETIC'
-[ "$(export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; load_git_env; git config --get core.quotePath)" = false ] || fail "cleanup overwrote unrelated process config"
+[ "$(load_git_env; env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git config --get core.quotePath)" = false ] || fail "cleanup overwrote unrelated process config"
 
 # --- Validate deploy inputs ---------------------------------------------------
 
@@ -346,7 +346,6 @@ ok "context dropped"
 [ "$(cat "$fake/secrets/A")" = "a-val" ] || fail "owned value written"
 has "$OUT" "secrets context: "
 hasnt "$OUT" "ci-token-val"
-[ -z "$(ls "$rt" | grep -i values)" ] || true
 
 # A value is stored byte-exact, trailing newline included.
 reset
