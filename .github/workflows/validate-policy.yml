@@ -21,6 +21,8 @@ on:
     paths:
       - "policy/**"
       - "cmd/check-go-native-firestore-sites/**"
+      - "cmd/firestore-collections/**"
+      - "internal/fscollections/**"
       - ".github/workflows/go-storage-driver-boundary.yml"
       - "tests/test-go-native-firestore-workflow.py"
   pull_request:
@@ -30,6 +32,9 @@ on:
       - ".github/workflows/go-storage-driver-boundary.yml"
       - ".github/workflows/validate-policy.yml"
       - "cmd/check-go-native-firestore-sites/**"
+      - "cmd/firestore-collections/**"
+      - "internal/fscollections/**"
+      - ".github/workflows/firestore-collections.yml"
       - "tests/test-go-native-firestore-workflow.py"
       - "scripts/check-go-storage-driver-boundary.sh"
       - "tests/test-extension-storage-boundary.sh"
@@ -96,6 +101,11 @@ jobs:
 
       - name: Test native Firestore site consistency checker
         run: go test ./cmd/check-go-native-firestore-sites
+
+      - name: Test Firestore collections checker (100% statement coverage)
+        run: |
+          go test -count=1 -coverprofile=fscollections.cover ./internal/fscollections ./cmd/firestore-collections
+          awk 'NR>1 && $NF==0 {print; bad=1} END{exit bad}' fscollections.cover
 
       - name: Test native boundary workflow contract
         run: python3 tests/test-go-native-firestore-workflow.py

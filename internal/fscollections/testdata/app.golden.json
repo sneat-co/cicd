@@ -1,0 +1,816 @@
+{
+ "format": "firestore-collections-emit/v1",
+ "paths": [
+  {
+   "path": "bare/b",
+   "kind": "document",
+   "sites": [
+    "app/app.go:33"
+   ]
+  },
+  {
+   "path": "boxed/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:101"
+   ]
+  },
+  {
+   "path": "called/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:47"
+   ]
+  },
+  {
+   "path": "declared/{id}",
+   "kind": "document",
+   "declared": true,
+   "sites": [
+    "app/app.go:80"
+   ]
+  },
+  {
+   "path": "depFixed/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:37"
+   ]
+  },
+  {
+   "path": "entries/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:81",
+    "review/review.go:90",
+    "review/review.go:93",
+    "review/review.go:94"
+   ]
+  },
+  {
+   "path": "ext/demo",
+   "kind": "document",
+   "sites": [
+    "app/app.go:48",
+    "app/app.go:95"
+   ]
+  },
+  {
+   "path": "ext/demo",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:18"
+   ]
+  },
+  {
+   "path": "ext/demo/generated/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:49",
+    "app/app.go:50"
+   ]
+  },
+  {
+   "path": "ext/demo/happenings",
+   "kind": "collection",
+   "sites": [
+    "app/app.go:48"
+   ]
+  },
+  {
+   "path": "ext/demo/happenings/h1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:23"
+   ]
+  },
+  {
+   "path": "ext/demo/helped/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:137"
+   ]
+  },
+  {
+   "path": "ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:26"
+   ]
+  },
+  {
+   "path": "ext/demo/items/{id}",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:27"
+   ]
+  },
+  {
+   "path": "ext/demo/looked/{id}",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:18",
+    "space/space.go:28",
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "ext/demo/looked/{id}/deeper/d",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "ext/demo/multi/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:120",
+    "app/app.go:142"
+   ]
+  },
+  {
+   "path": "ext/demo/picked/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:116",
+    "app/app.go:140",
+    "app/app.go:141"
+   ]
+  },
+  {
+   "path": "ext/demo/spaceless/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:107",
+    "app/app.go:140",
+    "app/app.go:141"
+   ]
+  },
+  {
+   "path": "ext/demo/vargen/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:51",
+    "app/app.go:53"
+   ]
+  },
+  {
+   "path": "ext/demo/w2/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:138"
+   ]
+  },
+  {
+   "path": "ext/other/days/d1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:24"
+   ]
+  },
+  {
+   "path": "ext/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:148"
+   ]
+  },
+  {
+   "path": "ext/x/below/b",
+   "kind": "document",
+   "sites": [
+    "app/app.go:148"
+   ]
+  },
+  {
+   "path": "ext/z",
+   "kind": "document",
+   "sites": [
+    "app/app.go:144"
+   ]
+  },
+  {
+   "path": "ext/z",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "ext/z/below/b",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "ext/z/under2/u",
+   "kind": "document",
+   "sites": [
+    "app/app.go:144"
+   ]
+  },
+  {
+   "path": "ext/{ext}",
+   "kind": "document",
+   "sites": [
+    "keys/keys.go:15",
+    "keys/keys.go:21"
+   ]
+  },
+  {
+   "path": "ext/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:125",
+    "app/app.go:143"
+   ]
+  },
+  {
+   "path": "fielded/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:26"
+   ]
+  },
+  {
+   "path": "fieldsOnly/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:58"
+   ]
+  },
+  {
+   "path": "grouped",
+   "kind": "collection",
+   "sites": [
+    "app/app.go:35"
+   ]
+  },
+  {
+   "path": "grouped",
+   "kind": "group",
+   "sites": [
+    "app/app.go:28"
+   ]
+  },
+  {
+   "path": "incomplete",
+   "kind": "group",
+   "sites": [
+    "app/app.go:29"
+   ]
+  },
+  {
+   "path": "inline/{id}",
+   "kind": "document",
+   "declared": true,
+   "sites": [
+    "app/app.go:81"
+   ]
+  },
+  {
+   "path": "lits/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:85",
+    "review/review.go:91"
+   ]
+  },
+  {
+   "path": "methodCall/h",
+   "kind": "document",
+   "sites": [
+    "app/app.go:73"
+   ]
+  },
+  {
+   "path": "methodExpr/h",
+   "kind": "document",
+   "sites": [
+    "app/app.go:72"
+   ]
+  },
+  {
+   "path": "mixedColl/m",
+   "kind": "document",
+   "sites": [
+    "app/app.go:164"
+   ]
+  },
+  {
+   "path": "named/{spaceID}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:43"
+   ]
+  },
+  {
+   "path": "optFields/{fields}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:54"
+   ]
+  },
+  {
+   "path": "optInt/3",
+   "kind": "document",
+   "sites": [
+    "review/review.go:53"
+   ]
+  },
+  {
+   "path": "optString/s1",
+   "kind": "document",
+   "sites": [
+    "review/review.go:52"
+   ]
+  },
+  {
+   "path": "optioned/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:25"
+   ]
+  },
+  {
+   "path": "orphan",
+   "kind": "group",
+   "sites": [
+    "app/app.go:30"
+   ]
+  },
+  {
+   "path": "other/{id}/deep",
+   "kind": "collection",
+   "declared": true,
+   "sites": [
+    "app/app.go:80"
+   ]
+  },
+  {
+   "path": "p",
+   "kind": "group",
+   "sites": [
+    "app/app.go:70"
+   ]
+  },
+  {
+   "path": "p/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:51"
+   ]
+  },
+  {
+   "path": "p/{id}/opt/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:51"
+   ]
+  },
+  {
+   "path": "plain/7",
+   "kind": "document",
+   "sites": [
+    "app/app.go:21"
+   ]
+  },
+  {
+   "path": "rootColl",
+   "kind": "collection",
+   "sites": [
+    "app/app.go:27"
+   ]
+  },
+  {
+   "path": "roots/r1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:18"
+   ]
+  },
+  {
+   "path": "selected/{ID}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:46"
+   ]
+  },
+  {
+   "path": "sneakyNew/x",
+   "kind": "document",
+   "sites": [
+    "review/review.go:44"
+   ]
+  },
+  {
+   "path": "spaces/a",
+   "kind": "document",
+   "sites": [
+    "app/app.go:55"
+   ]
+  },
+  {
+   "path": "spaces/b",
+   "kind": "document",
+   "sites": [
+    "app/app.go:56"
+   ]
+  },
+  {
+   "path": "spaces/s1",
+   "kind": "document",
+   "sites": [
+    "keys/keys.go:34"
+   ]
+  },
+  {
+   "path": "spaces/s1/ext/demo/happenings/h1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:23"
+   ]
+  },
+  {
+   "path": "spaces/s1/ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:25"
+   ]
+  },
+  {
+   "path": "spaces/s1/gotten/g1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:34"
+   ]
+  },
+  {
+   "path": "spaces/s9/ext/demo/picked/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:141"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo",
+   "kind": "document",
+   "sites": [
+    "space/space.go:18"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo/looked/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:18",
+    "space/space.go:28",
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo/looked/{id}/deeper/d",
+   "kind": "document",
+   "sites": [
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo/multi/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:142"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/z",
+   "kind": "document",
+   "sites": [
+    "app/app.go:144"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/z/under2/u",
+   "kind": "document",
+   "sites": [
+    "app/app.go:144"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:40",
+    "keys/keys.go:10",
+    "keys/keys.go:17"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo",
+   "kind": "document",
+   "sites": [
+    "app/app.go:48",
+    "review/review.go:46",
+    "space/space.go:11"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/generated/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:49",
+    "app/app.go:50"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/happenings",
+   "kind": "collection",
+   "sites": [
+    "app/app.go:48"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:27"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/multi/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:120"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/picked/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:116"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/vargen/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:51",
+    "app/app.go:53"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/z",
+   "kind": "document",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/z/below/b",
+   "kind": "document",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/{ext}",
+   "kind": "document",
+   "sites": [
+    "keys/keys.go:17",
+    "keys/keys.go:21"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/kids/{n}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:41"
+   ]
+  },
+  {
+   "path": "spaces/{space}/ext/x",
+   "kind": "document",
+   "sites": [
+    "app/app.go:148"
+   ]
+  },
+  {
+   "path": "spaces/{space}/ext/x/below/b",
+   "kind": "document",
+   "sites": [
+    "app/app.go:148"
+   ]
+  },
+  {
+   "path": "spaces/{space}/ext/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:125",
+    "app/app.go:143"
+   ]
+  },
+  {
+   "path": "sprinted/{id}",
+   "kind": "document",
+   "sites": [
+    "app/app.go:45"
+   ]
+  },
+  {
+   "path": "top/t",
+   "kind": "document",
+   "sites": [
+    "app/app.go:164"
+   ]
+  },
+  {
+   "path": "top/t/under/u",
+   "kind": "document",
+   "sites": [
+    "app/app.go:164"
+   ]
+  },
+  {
+   "path": "viaFrom",
+   "kind": "collection",
+   "sites": [
+    "review/review.go:73"
+   ]
+  },
+  {
+   "path": "withid/w",
+   "kind": "document",
+   "sites": [
+    "app/app.go:32"
+   ]
+  },
+  {
+   "path": "wrapped/w",
+   "kind": "document",
+   "sites": [
+    "app/app.go:31"
+   ]
+  }
+ ],
+ "unresolved": [
+  {
+   "site": "app/app.go:146",
+   "function": "helpers",
+   "reason": "unknownResult returns a key whose path is not known"
+  },
+  {
+   "site": "app/app.go:165",
+   "function": "callsMixed",
+   "reason": "cannot follow the key expression rootKeyHolderKey.Key"
+  },
+  {
+   "site": "app/app.go:22",
+   "function": "constants",
+   "reason": "variable rootKey is assigned 0 times"
+  },
+  {
+   "site": "app/app.go:57",
+   "function": "variables",
+   "reason": "variable reassigned is assigned 2 times"
+  },
+  {
+   "site": "app/app.go:63",
+   "function": "problems",
+   "reason": "the collection name names[0] is not a constant"
+  },
+  {
+   "site": "app/app.go:64",
+   "function": "problems",
+   "reason": "the key comes from a dynamic call f"
+  },
+  {
+   "site": "app/app.go:64",
+   "function": "problems",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
+  },
+  {
+   "site": "app/app.go:65",
+   "function": "problems",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
+  },
+  {
+   "site": "app/app.go:68",
+   "function": "problems",
+   "reason": "cannot follow the key expression v.(*record.Key)"
+  },
+  {
+   "site": "app/app.go:69",
+   "function": "problems",
+   "reason": "cannot follow the key expression rootKeyHolderKey.Key"
+  },
+  {
+   "site": "app/app.go:70",
+   "function": "problems",
+   "reason": "a group reference is used as a parent key"
+  },
+  {
+   "site": "app/app.go:71",
+   "function": "problems",
+   "reason": "unknownKey returns a key whose path is not known"
+  },
+  {
+   "site": "app/app.go:74",
+   "function": "problems",
+   "reason": "the collection name passed to helperCollection is not a constant"
+  },
+  {
+   "site": "app/app.go:75",
+   "function": "problems",
+   "reason": "the collection name passed to keys.ItemKey is not a constant"
+  },
+  {
+   "site": "app/app.go:77",
+   "function": "problems",
+   "reason": "the collection name name is not a constant"
+  },
+  {
+   "site": "review/review.go:21",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:23",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value m; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:24",
+   "function": "b1FuncValues",
+   "reason": "Key returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:28",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value g; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:35",
+   "function": "b2OtherModule",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:36",
+   "function": "b2OtherModule",
+   "reason": "Key returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:38",
+   "function": "b2OtherModule",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:55",
+   "function": "m2Options",
+   "reason": "key options passed as a slice cannot be read"
+  },
+  {
+   "site": "review/review.go:56",
+   "function": "m2Options",
+   "reason": "the key option o cannot be read"
+  },
+  {
+   "site": "review/review.go:57",
+   "function": "m2Options",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:63",
+   "function": "m1Unsupported",
+   "reason": "NewQualifiedRootCollectionRef is not supported by the check"
+  },
+  {
+   "site": "review/review.go:64",
+   "function": "m1Unsupported",
+   "reason": "NewDatabaseCollectionRef is not supported by the check"
+  },
+  {
+   "site": "review/review.go:65",
+   "function": "m1Unsupported",
+   "reason": "CollectionAt is not supported by the check"
+  },
+  {
+   "site": "review/review.go:92",
+   "function": "useEntries",
+   "reason": "newNoKey returns a key whose path is not known"
+  }
+ ]
+}
