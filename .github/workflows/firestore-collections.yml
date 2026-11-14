@@ -1,0 +1,107 @@
+name: Firestore collections (reusable)
+
+# Fails when Go code builds a Firestore path that the repository's generated
+# snapshot of defined collections does not list. The snapshot
+# (.firestore-collections.yaml) is generated from sneat-co/sneat-datatug and
+# committed in the calling repository, so this job reads no other repository's
+# definitions at PR time. Writes and queries are both checked. See
+# docs/firestore-collections.md.
+#
+#   jobs:
+#     firestore-collections:
+#       uses: sneat-co/cicd/.github/workflows/firestore-collections.yml@<reviewed-commit>
+#       with:
+#         cicd-ref: <the same reviewed commit>
+#       secrets:
+#         GO_PRIVATE_TOKEN: ${{ secrets.SNEAT_CI_READWRITE_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing the go.mod to check
+        type: string
+        required: false
+        default: backend
+      snapshot:
+        description: Generated snapshot path, relative to the repository root
+        type: string
+        required: false
+        default: .firestore-collections.yaml
+      packages:
+        description: Package patterns to check, relative to working-directory
+        type: string
+        required: false
+        default: ./...
+      cicd-ref:
+        description: Ref of sneat-co/cicd whose checker is built (pin the same commit as the uses line)
+        type: string
+        required: false
+        default: main
+      goprivate:
+        description: GOPRIVATE for the target module's private dependencies
+        type: string
+        required: false
+        default: github.com/sneat-co
+      timeout-minutes:
+        type: number
+        required: false
+        default: 15
+    secrets:
+      GO_PRIVATE_TOKEN:
+        description: Token that can read the target module's private Go dependencies
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  collections:
+    name: Firestore paths are defined
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout target source
+        uses: actions/checkout@v6
+        with:
+          path: source
+          persist-credentials: false
+      - name: Checkout checker
+        uses: actions/checkout@v6
+        with:
+          repository: sneat-co/cicd
+          ref: ${{ inputs.cicd-ref }}
+          path: .cicd
+          persist-credentials: false
+      - name: Record exact checker and target revisions
+        run: |
+          git -C .cicd rev-parse HEAD
+          git -C source rev-parse HEAD
+      - name: Set up Go for the target module
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ format('source/{0}/go.mod', inputs.working-directory) }}
+          cache: false
+      - name: Build checker without target dependencies
+        working-directory: .cicd
+        env:
+          GOWORK: 'off'
+        run: go build -mod=readonly -o "$RUNNER_TEMP/firestore-collections" ./cmd/firestore-collections
+      - name: Configure private Go modules
+        env:
+          TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+      - name: Check Firestore paths against the snapshot
+        env:
+          GOPRIVATE: ${{ inputs.goprivate }}
+          GOWORK: 'off'
+          WD: ${{ inputs.working-directory }}
+          SNAPSHOT: ${{ inputs.snapshot }}
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          # shellcheck disable=SC2086 # PACKAGES is a list of patterns
+          "$RUNNER_TEMP/firestore-collections" check -C "source/$WD" -repo-root source \
+            -snapshot "source/$SNAPSHOT" $PACKAGES
