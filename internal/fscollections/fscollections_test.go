@@ -104,6 +104,39 @@ func TestCheckFails(t *testing.T) {
 	}
 }
 
+// An explicit empty list is the snapshot of a product that defines no
+// collection yet. It passes while the code builds no path, and fails closed as
+// soon as the code builds any path or one the check cannot work out.
+func TestEmptySnapshot(t *testing.T) {
+	offline(t)
+	snap := writeFile(t, t.TempDir(), ".firestore-collections.yaml", strings.TrimSuffix(header, "collections:\n")+"collections: []\n")
+	none := t.TempDir()
+	writeFile(t, none, "go.mod", "module example.com/none\n\ngo 1.26\n")
+	writeFile(t, none, "none.go", "// Package none builds no Firestore path.\npackage none\n\n// ID is not a path.\nconst ID = \"none\"\n")
+
+	code, out, errOut := runMain(t, "check", "-C", none, "-snapshot", snap)
+	if code != 0 {
+		t.Fatalf("no paths, empty snapshot: exit %d, want 0:\n%s%s", code, out, errOut)
+	}
+	if want := "0 paths at 0 sites, 0 unresolved, checked against .firestore-collections.yaml (sneat-co/sneat-datatug@abc): 0 findings"; !strings.Contains(out, want) {
+		t.Errorf("missing %q in:\n%s", want, out)
+	}
+
+	code, out, errOut = runMain(t, "check", "-C", "testdata/app", "-repo-root", "testdata", "-snapshot", snap)
+	if code != 1 {
+		t.Fatalf("paths built, empty snapshot: exit %d, want 1:\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		`::error file=app/app/app.go,line=27::Firestore path "rootColl" is not defined in sneat-co/sneat-datatug.`,
+		`::error file=app/keys/keys.go,`,
+		`::error file=app/app/app.go,line=64::Cannot tell which Firestore path this builds`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestUsageAndLoadErrors(t *testing.T) {
 	offline(t)
 	dir := t.TempDir()
@@ -112,6 +145,7 @@ func TestUsageAndLoadErrors(t *testing.T) {
 		"syntax.yaml":  "format: [",
 		"format.yaml":  "format: other/v1\n",
 		"empty.yaml":   "format: firestore-collections/v1\n",
+		"null.yaml":    "format: firestore-collections/v1\ncollections:\n",
 		"odd.yaml":     header + "  - {path: \"spaces\"}\n",
 		"wild.yaml":    header + "  - {path: \"{x}/{id}\"}\n",
 		"good.yaml":    header + "  - {path: \"a/{id}\"}\n",
@@ -138,7 +172,8 @@ func TestUsageAndLoadErrors(t *testing.T) {
 		{[]string{"check", "-snapshot", filepath.Join(dir, "missing.yaml")}, "no such file"},
 		{[]string{"check", "-snapshot", filepath.Join(dir, "syntax.yaml")}, "syntax.yaml: yaml:"},
 		{[]string{"check", "-snapshot", filepath.Join(dir, "format.yaml")}, `format is "other/v1"`},
-		{[]string{"check", "-snapshot", filepath.Join(dir, "empty.yaml")}, "no collections"},
+		{[]string{"check", "-snapshot", filepath.Join(dir, "empty.yaml")}, "empty.yaml: has no collections list"},
+		{[]string{"check", "-snapshot", filepath.Join(dir, "null.yaml")}, "null.yaml: has no collections list"},
 		{[]string{"check", "-snapshot", filepath.Join(dir, "odd.yaml")}, "is not a document path"},
 		{[]string{"check", "-snapshot", filepath.Join(dir, "wild.yaml")}, "has no fixed collection name at segment 1"},
 		{[]string{"check", "-snapshot", filepath.Join(dir, "good.yaml"), "-C", filepath.Join(dir, "nowhere")}, "cannot analyze (the check fails closed)"},
