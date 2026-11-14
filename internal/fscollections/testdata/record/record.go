@@ -38,11 +38,40 @@ func NewIncompleteKey(collection string, idKind reflect.Kind, parent *Key) *Key 
 	return &Key{collection: collection, parent: parent}
 }
 
-func NewKeyWithFields(collection string, fields ...any) *Key { return &Key{collection: collection} }
-
-func NewKeyWithOptions(collection string, options ...any) (*Key, error) {
-	return &Key{collection: collection}, nil
+type FieldVal struct {
+	Name  string
+	Value any
 }
+
+type KeyOption func(*Key) error
+
+func WithKeyID[T comparable](id T) KeyOption { return func(k *Key) error { k.id = id; return nil } }
+
+func WithStringID(id string) KeyOption { return WithKeyID(id) }
+
+func WithIntID(id int) KeyOption { return WithKeyID(id) }
+
+func WithFields(fields []FieldVal) KeyOption { return func(k *Key) error { k.id = fields; return nil } }
+
+func WithParentKey(parent *Key) KeyOption {
+	return func(k *Key) error { k.parent = parent; return nil }
+}
+
+func NewKeyWithFields(collection string, fields ...FieldVal) *Key {
+	return &Key{collection: collection}
+}
+
+func NewKeyWithOptions(collection string, options ...KeyOption) (*Key, error) {
+	k := &Key{collection: collection}
+	for _, o := range options {
+		if err := o(k); err != nil {
+			return nil, err
+		}
+	}
+	return k, nil
+}
+
+func NewRecordWithoutKey(data any) Record { return rec{} }
 
 func NewRecordWithIncompleteKey(collection string, idKind reflect.Kind, data any) Record {
 	return rec{key: NewIncompleteKey(collection, idKind, nil)}

@@ -48,13 +48,22 @@ type EmittedProblem struct {
 var analyze = checker.Analyze
 
 // load loads the packages; any package error fails the check closed.
-var load = func(dir string, patterns []string) ([]*packages.Package, error) {
-	cfg := &packages.Config{Mode: packages.LoadAllSyntax, Dir: dir, Tests: false}
+// A Go file that build constraints exclude is not analyzed, so it fails the
+// check closed unless -tags (or GOOS/GOARCH) brings it in.
+func load(dir, tags string, patterns []string) ([]*packages.Package, error) {
+	cfg := &packages.Config{Mode: packages.LoadAllSyntax, Dir: dir, Tests: false, BuildFlags: []string{"-tags=" + tags}}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, err
 	}
 	var msgs []string
+	for _, p := range pkgs {
+		for _, f := range p.IgnoredFiles {
+			if strings.HasSuffix(f, ".go") && !strings.HasSuffix(f, "_test.go") {
+				msgs = append(msgs, f+": excluded by build constraints, so not analyzed; pass -tags (or set GOOS/GOARCH) to include it")
+			}
+		}
+	}
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		for _, e := range p.Errors {
 			msgs = append(msgs, e.Error())
@@ -68,8 +77,8 @@ var load = func(dir string, patterns []string) ([]*packages.Package, error) {
 
 // Analyze loads the packages and returns the paths they build, with file
 // names relative to root.
-func Analyze(dir, root string, patterns []string) (*Emitted, error) {
-	pkgs, err := load(dir, patterns)
+func Analyze(dir, root, tags string, patterns []string) (*Emitted, error) {
+	pkgs, err := load(dir, tags, patterns)
 	if err != nil {
 		return nil, err
 	}
@@ -148,9 +157,9 @@ func Check(e *Emitted, snap *Snapshot, snapshotName string, w io.Writer) int {
 		if snap.Defined(p.Kind, p.Path) {
 			continue
 		}
-		if p.Guard != "" {
-			// Built only when an argument is empty, such as the spaceless
-			// ext/{extension} branch of NewSpaceModuleKey; counted, not failed.
+		if p.Guard != "" && strings.HasPrefix(p.Path, "ext/") {
+			// Built only by the spaceless ext/{extension} branch of
+			// coretypes.NewSpaceModuleKey (an empty space id); counted, not failed.
 			guarded += len(p.Sites)
 			continue
 		}
@@ -170,7 +179,7 @@ func Check(e *Emitted, snap *Snapshot, snapshotName string, w io.Writer) int {
 		fmt.Fprintf(w, "::error file=%s,line=%s::Cannot tell which Firestore path this builds (%s). The check fails closed: build the path from constants, or name it on a %s<path> -- <reason> comment; the path must be defined in sneat-co/sneat-datatug. Read first: %s\n", file, line, u.Reason, DirectivePrefix, PrinciplesURL)
 	}
 	if guarded > 0 {
-		fmt.Fprintf(w, "firestore-collections: %d sites build an undefined path only when an argument is empty (emit lists them with their guard); not counted as findings\n", guarded)
+		fmt.Fprintf(w, "firestore-collections: %d sites build an undefined spaceless ext/ path only when the space id is empty (emit lists them with their guard); not counted as findings\n", guarded)
 	}
 	return failures
 }
@@ -179,7 +188,7 @@ func Check(e *Emitted, snap *Snapshot, snapshotName string, w io.Writer) int {
 // 2 usage or load errors.
 func Main(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || (args[0] != "emit" && args[0] != "check") {
-		fmt.Fprintln(stderr, "usage: firestore-collections emit|check [-C dir] [-repo-root dir] [-snapshot file] [packages]")
+		fmt.Fprintln(stderr, "usage: firestore-collections emit|check [-C dir] [-repo-root dir] [-tags list] [-snapshot file] [packages]")
 		return 2
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -187,6 +196,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	dir := fs.String("C", ".", "directory of the Go module to analyze")
 	root := fs.String("repo-root", "", "directory that reported file names are relative to (default: -C)")
 	snapshot := fs.String("snapshot", "", "check: the generated snapshot of defined collections")
+	tags := fs.String("tags", "", "build tags, comma-separated, as the module's own CI builds with")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -209,7 +219,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	e, err := Analyze(*dir, *root, patterns)
+	e, err := Analyze(*dir, *root, *tags, patterns)
 	if err != nil {
 		fmt.Fprintf(stderr, "firestore-collections: cannot analyze (the check fails closed): %v\n", err)
 		return 2

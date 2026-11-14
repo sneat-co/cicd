@@ -123,6 +123,9 @@ type state struct {
 	local   map[*types.Func]*keyFact
 	params  map[*types.Var]int
 	assigns map[*types.Var][]assignment
+	// keyFields holds `v.Key = ...` assignments to a record.DataWithID or
+	// record.WithID variable v, which carry its key.
+	keyFields map[*types.Var][]ast.Expr
 }
 
 type evalError string
@@ -172,11 +175,11 @@ func run(pass *analysis.Pass) (any, error) {
 				if d.Body != nil {
 					fn := pass.TypesInfo.Defs[d.Name].(*types.Func)
 					st.enter(fn.Signature(), d.Body)
-					st.report(res, d.Body, fn.Name(), directives)
+					st.report(res, d.Body, fn.Name(), spacelessWrappers[funcName(fn)], directives)
 				}
 			case *ast.GenDecl:
 				st.enter(nil, nil)
-				st.report(res, d, "", directives)
+				st.report(res, d, "", false, directives)
 			}
 		}
 	}
@@ -187,6 +190,7 @@ func run(pass *analysis.Pass) (any, error) {
 func (st *state) enter(sig *types.Signature, body ast.Node) {
 	st.params = map[*types.Var]int{}
 	st.assigns = map[*types.Var][]assignment{}
+	st.keyFields = map[*types.Var][]ast.Expr{}
 	if sig != nil {
 		for i := 0; i < sig.Params().Len(); i++ {
 			st.params[sig.Params().At(i)] = i
@@ -205,6 +209,9 @@ func (st *state) enter(sig *types.Signature, body ast.Node) {
 		switch n := n.(type) {
 		case *ast.AssignStmt:
 			for i, l := range n.Lhs {
+				if v := st.keyField(l); v != nil && len(n.Rhs) == len(n.Lhs) {
+					st.keyFields[v] = append(st.keyFields[v], n.Rhs[i])
+				}
 				id, ok := ast.Unparen(l).(*ast.Ident)
 				if !ok {
 					continue
@@ -264,7 +271,13 @@ func (st *state) factOf(fd *ast.FuncDecl, fn *types.Func) *keyFact {
 		hasKey = hasKey || keyish(results.At(i).Type())
 	}
 	if hasKey {
-		walkReturns(fd.Body.List, nil, st.pass.TypesInfo, st.params, func(ret *ast.ReturnStmt, guard *Template) {
+		// Only the known spaceless wrapper's `if spaceID == ""` branch is a
+		// guard; in any other function both branches are plain paths.
+		var guardParams map[*types.Var]int
+		if spacelessWrappers[funcName(fn)] {
+			guardParams = st.params
+		}
+		walkReturns(fd.Body.List, nil, st.pass.TypesInfo, guardParams, func(ret *ast.ReturnStmt, guard *Template) {
 			for i := 0; i < results.Len() && !failed; i++ {
 				if !keyish(results.At(i).Type()) {
 					continue
@@ -360,6 +373,9 @@ func (st *state) evalVar(v *types.Var) ([]Template, error) {
 		return []Template{{Kind: KindDocument, Segs: []Seg{{Kind: segKeyParam, Index: idx, Value: v.Name()}}, GuardParam: noGuard}}, nil
 	}
 	as := st.assigns[v]
+	if kf := st.keyFields[v]; len(as) == 0 && len(kf) == 1 {
+		return st.evalKey(kf[0]) // v.ID = id; v.Key = NewXKey(...); return v
+	}
 	if len(as) != 1 || as[0].rhs == nil {
 		return nil, fail("variable %s is assigned %d times", v.Name(), len(as))
 	}
@@ -383,8 +399,39 @@ func (st *state) evalKey(e ast.Expr) ([]Template, error) {
 		}
 	case *ast.CallExpr:
 		return st.evalCall(e, 0)
+	case *ast.SelectorExpr:
+		if v := st.keyField(e); v != nil {
+			return st.evalVar(v)
+		}
+	case *ast.CompositeLit:
+		if keyish(st.pass.TypesInfo.TypeOf(e)) {
+			for _, el := range e.Elts {
+				if kv, ok := el.(*ast.KeyValueExpr); ok && types.ExprString(kv.Key) == "Key" {
+					return st.evalKey(kv.Value)
+				}
+			}
+		}
 	}
 	return nil, fail("cannot follow the key expression %s", types.ExprString(e))
+}
+
+// keyField returns v for the expression v.Key, where v is a local
+// record.DataWithID or record.WithID variable (or a pointer to one) and Key is
+// its field, not a method.
+func (st *state) keyField(e ast.Expr) *types.Var {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Key" {
+		return nil
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	v, _ := st.pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if s := st.pass.TypesInfo.Selections[sel]; v == nil || s == nil || s.Kind() != types.FieldVal || !keyish(v.Type()) {
+		return nil
+	}
+	return v
 }
 
 // value returns the segment for a string or id expression.
@@ -426,22 +473,43 @@ type primitive struct {
 	coll   int // argument index of the collection name, or -1 for a pass-through
 	id     int // argument index of the id, or -1 for a generated id
 	pass   int // argument index of a key passed through unchanged
+	// options: the arguments after the collection are record.KeyOption values
+	options bool
+}
+
+// spacelessWrappers are the only functions whose `if p == "" { return ... }`
+// branch makes a guarded path: the spaceless ext/{extension} records of
+// sneat-specs Decision 0002. A guarded path is counted, not failed, by check,
+// and only when it starts with ext/.
+var spacelessWrappers = map[string]bool{
+	"github.com/sneat-co/sneat-go-core/coretypes.NewSpaceModuleKey": true,
+}
+
+// unsupported dal-go functions build paths the check does not model.
+var unsupported = map[string]bool{
+	dalPkg + ".CollectionOf": true,
+	dalPkg + ".CollectionAt": true,
+}
+
+// notPaths are dal-go functions that return a key-carrying type without a path.
+var notPaths = map[string]bool{
+	recordPkg + ".NewRecordWithoutKey": true,
 }
 
 var primitives = map[string]primitive{
-	recordPkg + ".NewKeyWithID":               {KindDocument, -1, 0, 1, -1},
-	recordPkg + ".NewKeyWithParentAndID":      {KindDocument, 0, 1, 2, -1},
-	recordPkg + ".NewIncompleteKey":           {KindDocument, 2, 0, -1, -1},
-	recordPkg + ".NewKeyWithFields":           {KindDocument, -1, 0, -1, -1},
-	recordPkg + ".NewKeyWithOptions":          {KindDocument, -1, 0, -1, -1},
-	recordPkg + ".NewRecordWithIncompleteKey": {KindGroup, -1, 0, -1, -1},
-	recordPkg + ".NewRecord":                  {"", -1, -1, -1, 0},
-	recordPkg + ".NewRecordWithData":          {"", -1, -1, -1, 0},
-	recordPkg + ".NewDataWithID":              {"", -1, -1, -1, 1},
-	recordPkg + ".NewWithID":                  {"", -1, -1, -1, 1},
-	dalPkg + ".NewCollectionRef":              {KindCollection, 2, 0, -1, -1},
-	dalPkg + ".NewRootCollectionRef":          {KindCollection, -1, 0, -1, -1},
-	dalPkg + ".NewCollectionGroupRef":         {KindGroup, -1, 0, -1, -1},
+	recordPkg + ".NewKeyWithID":               {KindDocument, -1, 0, 1, -1, false},
+	recordPkg + ".NewKeyWithParentAndID":      {KindDocument, 0, 1, 2, -1, false},
+	recordPkg + ".NewIncompleteKey":           {KindDocument, 2, 0, -1, -1, false},
+	recordPkg + ".NewKeyWithFields":           {KindDocument, -1, 0, -1, -1, false},
+	recordPkg + ".NewKeyWithOptions":          {KindDocument, -1, 0, -1, -1, true},
+	recordPkg + ".NewRecordWithIncompleteKey": {KindGroup, -1, 0, -1, -1, false},
+	recordPkg + ".NewRecord":                  {"", -1, -1, -1, 0, false},
+	recordPkg + ".NewRecordWithData":          {"", -1, -1, -1, 0, false},
+	recordPkg + ".NewDataWithID":              {"", -1, -1, -1, 1, false},
+	recordPkg + ".NewWithID":                  {"", -1, -1, -1, 1, false},
+	dalPkg + ".NewCollectionRef":              {KindCollection, 2, 0, -1, -1, false},
+	dalPkg + ".NewRootCollectionRef":          {KindCollection, -1, 0, -1, -1, false},
+	dalPkg + ".NewCollectionGroupRef":         {KindGroup, -1, 0, -1, -1, false},
 }
 
 func funcName(fn *types.Func) string {
@@ -521,6 +589,12 @@ func (st *state) evalPrimitive(p primitive, call *ast.CallExpr) ([]Template, err
 	if p.id >= 0 {
 		id = st.value(call.Args[p.id])
 	}
+	if p.options {
+		var err error
+		if parents, id, err = st.keyOptions(call, parents, id); err != nil {
+			return nil, err
+		}
+	}
 	var out []Template
 	for _, parent := range parents {
 		if parent.Kind == KindCollection || parent.Kind == KindGroup {
@@ -541,6 +615,37 @@ func (st *state) evalPrimitive(p primitive, call *ast.CallExpr) ([]Template, err
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// keyOptions reads the record.KeyOption arguments of NewKeyWithOptions. An
+// option the check cannot read fails closed.
+func (st *state) keyOptions(call *ast.CallExpr, parents []Template, id Seg) ([]Template, Seg, error) {
+	if call.Ellipsis.IsValid() {
+		return nil, id, fail("key options passed as a slice cannot be read")
+	}
+	for _, a := range call.Args[1:] {
+		name := ""
+		oc, ok := ast.Unparen(a).(*ast.CallExpr)
+		if ok {
+			if fn := st.callee(oc); fn != nil {
+				name = funcName(fn)
+			}
+		}
+		switch name {
+		case recordPkg + ".WithParentKey":
+			var err error
+			if parents, err = st.evalKey(oc.Args[0]); err != nil {
+				return nil, id, err
+			}
+		case recordPkg + ".WithKeyID", recordPkg + ".WithStringID", recordPkg + ".WithIntID":
+			id = st.value(oc.Args[0])
+		case recordPkg + ".WithFields":
+			id = Seg{Kind: segWild, Value: "fields"}
+		default:
+			return nil, id, fail("the key option %s cannot be read", types.ExprString(a))
+		}
+	}
+	return parents, id, nil
 }
 
 // args returns the arguments of a call that match the callee's parameters:
@@ -592,6 +697,9 @@ func (st *state) substitute(t Template, call *ast.CallExpr) ([]Template, error) 
 			for _, o := range out {
 				for _, p := range parents {
 					n := o
+					if len(t.Segs) == 1 {
+						n.Kind = p.Kind // a pure pass-through keeps what it passes on
+					}
 					n.Segs = append(append([]Seg{}, o.Segs...), p.Segs...)
 					if n.GuardParam == noGuard && p.GuardParam != noGuard {
 						n.GuardParam, n.Guard = p.GuardParam, p.Guard
@@ -657,18 +765,43 @@ func pure(t Template) bool { return len(t.Segs) == 1 && t.Segs[0].Kind == segKey
 // cannot be followed: the constructor that built it is checked where it is
 // called.
 func (st *state) site(call *ast.CallExpr) ([]Template, error) {
+	info := st.pass.TypesInfo
+	if info.Types[call.Fun].IsType() {
+		return nil, nil // a conversion
+	}
+	if _, ok := typeutil.Callee(info, call).(*types.Builtin); ok {
+		return nil, nil // new(record.Key) and the like build no path
+	}
 	fn := st.callee(call)
 	if fn == nil {
+		if st.keyishCall(call) {
+			return nil, fail("the key comes from a call of the function value %s; call the constructor or a helper directly", types.ExprString(call.Fun))
+		}
 		return nil, nil
 	}
-	if p, ok := primitives[funcName(fn)]; ok {
+	name := funcName(fn)
+	if p, ok := primitives[name]; ok {
 		ts, err := st.evalCall(call, 0)
 		if err != nil && p.pass >= 0 {
 			return nil, nil
 		}
 		return ts, err
 	}
+	if unsupported[name] {
+		return nil, fail("%s is not supported by the check", fn.Name())
+	}
+	if pkg := fn.Pkg(); pkg != nil && (pkg.Path() == recordPkg || pkg.Path() == dalPkg) {
+		if fn.Signature().Recv() == nil && !notPaths[name] && st.keyishCall(call) {
+			return nil, fail("%s is not supported by the check", fn.Name())
+		}
+		return nil, nil // an accessor of an existing key, record or query
+	}
 	f := st.fact(fn)
+	if (f == nil || f.Results == nil) && st.keyishCall(call) {
+		// Any function or method, in any module, that returns a key the
+		// check cannot follow: a field, a variable or a call it cannot read.
+		return nil, fail("%s returns a key whose path is not known", fn.Name())
+	}
 	if f == nil {
 		return nil, nil
 	}
@@ -696,6 +829,20 @@ func (st *state) site(call *ast.CallExpr) ([]Template, error) {
 	return ts, nil
 }
 
+// keyishCall reports whether a call returns a key-carrying value.
+func (st *state) keyishCall(call *ast.CallExpr) bool {
+	t := st.pass.TypesInfo.TypeOf(call)
+	if tup, ok := t.(*types.Tuple); ok {
+		for i := 0; i < tup.Len(); i++ {
+			if keyish(tup.At(i).Type()) {
+				return true
+			}
+		}
+		return false
+	}
+	return t != nil && keyish(t)
+}
+
 // opens returns the templates built in body that only callers can settle.
 func (st *state) opens(body ast.Node) []Template {
 	var out []Template
@@ -716,7 +863,7 @@ func (st *state) opens(body ast.Node) []Template {
 }
 
 // report records every path built inside node.
-func (st *state) report(res *Result, node ast.Node, fname string, directives map[int][]string) {
+func (st *state) report(res *Result, node ast.Node, fname string, spaceless bool, directives map[int][]string) {
 	fset := st.pass.Fset
 	// Bodies of `if p == ""` branches on a parameter: what they build is
 	// built only when that argument is empty.
@@ -726,7 +873,7 @@ func (st *state) report(res *Result, node ast.Node, fname string, directives map
 	}
 	var guards []guardRange
 	ast.Inspect(node, func(n ast.Node) bool {
-		if is, ok := n.(*ast.IfStmt); ok {
+		if is, ok := n.(*ast.IfStmt); ok && spaceless {
 			if g := emptyGuard(is.Cond, st.pass.TypesInfo, st.params); g != nil {
 				guards = append(guards, guardRange{is.Body, g.Guard})
 			}

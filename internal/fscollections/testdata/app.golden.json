@@ -9,6 +9,13 @@
    ]
   },
   {
+   "path": "boxed/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:101"
+   ]
+  },
+  {
    "path": "called/{id}",
    "kind": "document",
    "sites": [
@@ -24,9 +31,27 @@
    ]
   },
   {
+   "path": "depFixed/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:37"
+   ]
+  },
+  {
+   "path": "entries/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:81",
+    "review/review.go:90",
+    "review/review.go:93",
+    "review/review.go:94"
+   ]
+  },
+  {
    "path": "ext/demo",
    "kind": "document",
    "sites": [
+    "app/app.go:48",
     "app/app.go:95"
    ]
   },
@@ -35,13 +60,14 @@
    "kind": "document",
    "guard": "spaceID is empty",
    "sites": [
-    "app/app.go:48"
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:18"
    ]
   },
   {
    "path": "ext/demo/generated/x",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:49",
     "app/app.go:50"
@@ -50,9 +76,15 @@
   {
    "path": "ext/demo/happenings",
    "kind": "collection",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:48"
+   ]
+  },
+  {
+   "path": "ext/demo/happenings/h1",
+   "kind": "document",
+   "sites": [
+    "app/app.go:23"
    ]
   },
   {
@@ -63,55 +95,69 @@
    ]
   },
   {
+   "path": "ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:26"
+   ]
+  },
+  {
+   "path": "ext/demo/items/{id}",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:27"
+   ]
+  },
+  {
+   "path": "ext/demo/looked/{id}",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:18",
+    "space/space.go:28",
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "ext/demo/looked/{id}/deeper/d",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:29"
+   ]
+  },
+  {
    "path": "ext/demo/multi/x",
    "kind": "document",
-   "guard": "id is empty",
    "sites": [
+    "app/app.go:120",
     "app/app.go:142"
    ]
   },
   {
-   "path": "ext/demo/multi/x",
-   "kind": "document",
-   "guard": "spaceID is empty",
-   "sites": [
-    "app/app.go:120"
-   ]
-  },
-  {
    "path": "ext/demo/picked/{id}",
    "kind": "document",
    "sites": [
-    "app/app.go:140"
-   ]
-  },
-  {
-   "path": "ext/demo/picked/{id}",
-   "kind": "document",
-   "guard": "spaceID is empty",
-   "sites": [
-    "app/app.go:116"
+    "app/app.go:116",
+    "app/app.go:140",
+    "app/app.go:141"
    ]
   },
   {
    "path": "ext/demo/spaceless/{id}",
    "kind": "document",
    "sites": [
-    "app/app.go:140"
-   ]
-  },
-  {
-   "path": "ext/demo/spaceless/{id}",
-   "kind": "document",
-   "guard": "spaceID is empty",
-   "sites": [
-    "app/app.go:107"
+    "app/app.go:107",
+    "app/app.go:140",
+    "app/app.go:141"
    ]
   },
   {
    "path": "ext/demo/vargen/x",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:51",
     "app/app.go:53"
@@ -134,7 +180,6 @@
   {
    "path": "ext/x",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:148"
    ]
@@ -142,7 +187,6 @@
   {
    "path": "ext/x/below/b",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:148"
    ]
@@ -150,15 +194,29 @@
   {
    "path": "ext/z",
    "kind": "document",
-   "guard": "id is empty",
    "sites": [
     "app/app.go:144"
    ]
   },
   {
+   "path": "ext/z",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "ext/z/below/b",
+   "kind": "document",
+   "guard": "spaceID is empty",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
    "path": "ext/z/under2/u",
    "kind": "document",
-   "guard": "id is empty",
    "sites": [
     "app/app.go:144"
    ]
@@ -166,7 +224,6 @@
   {
    "path": "ext/{ext}",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "keys/keys.go:15",
     "keys/keys.go:21"
@@ -175,7 +232,6 @@
   {
    "path": "ext/{id}",
    "kind": "document",
-   "guard": "spaceID is empty",
    "sites": [
     "app/app.go:125",
     "app/app.go:143"
@@ -186,6 +242,13 @@
    "kind": "document",
    "sites": [
     "app/app.go:26"
+   ]
+  },
+  {
+   "path": "fieldsOnly/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:58"
    ]
   },
   {
@@ -218,6 +281,14 @@
    ]
   },
   {
+   "path": "lits/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:85",
+    "review/review.go:91"
+   ]
+  },
+  {
    "path": "methodCall/h",
    "kind": "document",
    "sites": [
@@ -243,6 +314,27 @@
    "kind": "document",
    "sites": [
     "app/app.go:43"
+   ]
+  },
+  {
+   "path": "optFields/{fields}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:54"
+   ]
+  },
+  {
+   "path": "optInt/3",
+   "kind": "document",
+   "sites": [
+    "review/review.go:53"
+   ]
+  },
+  {
+   "path": "optString/s1",
+   "kind": "document",
+   "sites": [
+    "review/review.go:52"
    ]
   },
   {
@@ -275,6 +367,20 @@
    ]
   },
   {
+   "path": "p/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:51"
+   ]
+  },
+  {
+   "path": "p/{id}/opt/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:51"
+   ]
+  },
+  {
    "path": "plain/7",
    "kind": "document",
    "sites": [
@@ -300,6 +406,13 @@
    "kind": "document",
    "sites": [
     "app/app.go:46"
+   ]
+  },
+  {
+   "path": "sneakyNew/x",
+   "kind": "document",
+   "sites": [
+    "review/review.go:44"
    ]
   },
   {
@@ -331,6 +444,13 @@
    ]
   },
   {
+   "path": "spaces/s1/ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:25"
+   ]
+  },
+  {
    "path": "spaces/s1/gotten/g1",
    "kind": "document",
    "sites": [
@@ -342,6 +462,29 @@
    "kind": "document",
    "sites": [
     "app/app.go:141"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo",
+   "kind": "document",
+   "sites": [
+    "space/space.go:18"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo/looked/{id}",
+   "kind": "document",
+   "sites": [
+    "space/space.go:18",
+    "space/space.go:28",
+    "space/space.go:29"
+   ]
+  },
+  {
+   "path": "spaces/{id}/ext/demo/looked/{id}/deeper/d",
+   "kind": "document",
+   "sites": [
+    "space/space.go:29"
    ]
   },
   {
@@ -378,7 +521,9 @@
    "path": "spaces/{spaceID}/ext/demo",
    "kind": "document",
    "sites": [
-    "app/app.go:48"
+    "app/app.go:48",
+    "review/review.go:46",
+    "space/space.go:11"
    ]
   },
   {
@@ -394,6 +539,15 @@
    "kind": "collection",
    "sites": [
     "app/app.go:48"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/demo/items/{id}",
+   "kind": "document",
+   "sites": [
+    "review/review.go:46",
+    "space/space.go:11",
+    "space/space.go:27"
    ]
   },
   {
@@ -416,6 +570,20 @@
    "sites": [
     "app/app.go:51",
     "app/app.go:53"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/z",
+   "kind": "document",
+   "sites": [
+    "space/space.go:30"
+   ]
+  },
+  {
+   "path": "spaces/{spaceID}/ext/z/below/b",
+   "kind": "document",
+   "sites": [
+    "space/space.go:30"
    ]
   },
   {
@@ -477,6 +645,13 @@
    ]
   },
   {
+   "path": "viaFrom",
+   "kind": "collection",
+   "sites": [
+    "review/review.go:73"
+   ]
+  },
+  {
    "path": "withid/w",
    "kind": "document",
    "sites": [
@@ -492,6 +667,11 @@
   }
  ],
  "unresolved": [
+  {
+   "site": "app/app.go:146",
+   "function": "helpers",
+   "reason": "unknownResult returns a key whose path is not known"
+  },
   {
    "site": "app/app.go:165",
    "function": "callsMixed",
@@ -516,6 +696,16 @@
    "site": "app/app.go:64",
    "function": "problems",
    "reason": "the key comes from a dynamic call f"
+  },
+  {
+   "site": "app/app.go:64",
+   "function": "problems",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
+  },
+  {
+   "site": "app/app.go:65",
+   "function": "problems",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
   },
   {
    "site": "app/app.go:68",
@@ -551,6 +741,76 @@
    "site": "app/app.go:77",
    "function": "problems",
    "reason": "the collection name name is not a constant"
+  },
+  {
+   "site": "review/review.go:21",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value f; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:23",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value m; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:24",
+   "function": "b1FuncValues",
+   "reason": "Key returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:28",
+   "function": "b1FuncValues",
+   "reason": "the key comes from a call of the function value g; call the constructor or a helper directly"
+  },
+  {
+   "site": "review/review.go:35",
+   "function": "b2OtherModule",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:36",
+   "function": "b2OtherModule",
+   "reason": "Key returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:38",
+   "function": "b2OtherModule",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:55",
+   "function": "m2Options",
+   "reason": "key options passed as a slice cannot be read"
+  },
+  {
+   "site": "review/review.go:56",
+   "function": "m2Options",
+   "reason": "the key option o cannot be read"
+  },
+  {
+   "site": "review/review.go:57",
+   "function": "m2Options",
+   "reason": "Dyn returns a key whose path is not known"
+  },
+  {
+   "site": "review/review.go:63",
+   "function": "m1Unsupported",
+   "reason": "NewQualifiedRootCollectionRef is not supported by the check"
+  },
+  {
+   "site": "review/review.go:64",
+   "function": "m1Unsupported",
+   "reason": "NewDatabaseCollectionRef is not supported by the check"
+  },
+  {
+   "site": "review/review.go:65",
+   "function": "m1Unsupported",
+   "reason": "CollectionAt is not supported by the check"
+  },
+  {
+   "site": "review/review.go:92",
+   "function": "useEntries",
+   "reason": "newNoKey returns a key whose path is not known"
   }
  ]
 }
