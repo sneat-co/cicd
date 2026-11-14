@@ -71,8 +71,11 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 	if s.Format != SnapshotFormat {
 		return nil, fmt.Errorf("%s: format is %q, want %q", path, s.Format, SnapshotFormat)
 	}
-	if len(s.Collections) == 0 {
-		return nil, fmt.Errorf("%s: no collections", path)
+	// A product that defines no collection yet commits `collections: []`: it
+	// passes only while its code builds no path. A missing or null list is a
+	// broken file, not an empty one, and fails.
+	if s.Collections == nil {
+		return nil, fmt.Errorf("%s: has no collections list (a product with no collection yet writes `collections: []`)", path)
 	}
 	for _, c := range s.Collections {
 		if why := validPath(c.Path); why != "" {

@@ -58,16 +58,20 @@ By path shape. Collection names must be equal. An id that is `{name}` in the
 definition matches any id; a fixed id in the definition (`ext/demo`)
 matches only the same fixed id in code. A collection-group reference matches a
 definition with that last collection name. sneat-datatug
-`tools/collections/collections.py` uses the same rule.
+`tools/collections/fscheck.py` uses the same rule.
 
 ## In a product repository
 
-Commit the generated snapshot (`python3 tools/collections/collections.py
+Commit the generated snapshot (`python3 tools/collections/fscheck.py
 snapshot --target <name> --out <file>` in sneat-datatug) and call
 `.github/workflows/firestore-collections.yml`, pinned to a reviewed commit
 (`cicd-ref` is required and must be the same commit). Protect the snapshot with
 CODEOWNERS: the check proves a path is listed, and only review of the
-snapshot and of the definitions repository proves it was approved. The
+snapshot and of the definitions repository proves it was approved. A product
+that defines no collection yet commits `collections: []`: the check passes
+while its code builds no path and fails on the first path it builds (or
+cannot work out). A missing snapshot, or one with no `collections` key or a
+null one, fails with exit 2. The
 private-module token is used only by the download step and removed before the
 checker loads the target code; pass a read-only token. A new collection fails
 with:
