@@ -36,7 +36,7 @@
       "groupSlug": "javascript-dependencies"
     },
     {
-      "description": "One pull request per repository for every third-party non-major update, across all managers (Go modules, npm, GitHub Actions, Docker, digests). Fewer PRs means fewer CI runs, and on a branch that must be up to date every merge sends the other open PRs round again. Majors keep the per-manager groups above. The sneat-co rules below still pull own libraries out into their own ungated group.",
+      "description": "One pull request per repository for every third-party non-major update, across all managers (Go modules, npm, GitHub Actions, Docker, digests). Fewer PRs means fewer CI runs, and on a branch that must be up to date every merge sends the other open PRs round again. Majors keep the per-manager groups above. Own libraries (sneat-co, dal-go, strongo, @sneat) and the Go toolchain are excluded, so their own ungated or separate groups from this and the sibling presets still apply. For repos that extend sneat-renovate-nx or sneat-renovate-go before this preset, this deliberately replaces those presets\u0027 per-ecosystem non-major groups (angular, nx, ionic, firebase, eslint, 3d-parties) with the single group.",
       "matchUpdateTypes": [
         "minor",
         "patch",
@@ -44,7 +44,12 @@
         "digest"
       ],
       "matchPackageNames": [
-        "*"
+        "*",
+        "!golang",
+        "!github.com/sneat-co/**",
+        "!github.com/dal-go/**",
+        "!github.com/strongo/**",
+        "!@sneat/**"
       ],
       "groupName": "third-party non-major dependencies",
       "groupSlug": "third-party-non-major"
