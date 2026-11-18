@@ -44,7 +44,6 @@
         "digest"
       ],
       "matchPackageNames": [
-        "*",
         "!golang",
         "!github.com/sneat-co/**",
         "!github.com/dal-go/**",
