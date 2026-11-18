@@ -36,6 +36,32 @@
       "groupSlug": "javascript-dependencies"
     },
     {
+      "description": "One pull request per repository for every third-party non-major update, across all managers (Go modules, npm, GitHub Actions, Docker, digests). Fewer PRs means fewer CI runs, and on a branch that must be up to date every merge sends the other open PRs round again. Majors keep the per-manager groups above. Own libraries (sneat-co, dal-go, strongo, @sneat) and the Go toolchain are excluded, so their own ungated or separate groups from this and the sibling presets still apply. For repos that extend sneat-renovate-nx or sneat-renovate-go before this preset, this deliberately replaces those presets\u0027 per-ecosystem non-major groups (angular, nx, ionic, firebase, eslint, 3d-parties) with the single group.",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "matchPackageNames": [
+        "!golang",
+        "!github.com/sneat-co/**",
+        "!github.com/dal-go/**",
+        "!github.com/strongo/**",
+        "!@sneat/**"
+      ],
+      "groupName": "third-party non-major dependencies",
+      "groupSlug": "third-party-non-major"
+    },
+    {
+      "description": "pnpm is pinned twice in a repository: package.json `packageManager` (npm manager) and the workflow's pnpm/action-setup version (github-actions manager). Split across two PRs neither can pass (\"Multiple versions of pnpm\"), so every pnpm update, major included, travels as one PR.",
+      "matchPackageNames": [
+        "pnpm"
+      ],
+      "groupName": "pnpm",
+      "groupSlug": "pnpm"
+    },
+    {
       "description": "Batch dependencies published from the Sneat-Co GitHub organization. Own libraries are never gated: the fleet must be on the latest sneat-co release always (founder rule 2026-09-02); third parties keep the weekly window and the 1-day release age above. Note that matchSourceUrls can only match a datasource whose source URL is known -- in practice Go modules, whose module path is the repository URL. npm @sneat/* packages publish no `repository` field, so they are covered by the sibling matchPackageNames rule below, not by this one.",
       "matchSourceUrls": [
         "https://github.com/sneat-co/**"
