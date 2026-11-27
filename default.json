@@ -96,6 +96,16 @@
         "*"
       ],
       "automerge": true
+    },
+    {
+      "description": "Honor the Sneat Apps main-merge pause while continuing to propose updates.",
+      "matchRepositories": [
+        "sneat-co/sneat-apps"
+      ],
+      "matchJsonata": [
+        "baseBranch = 'main'"
+      ],
+      "automerge": false
     }
   ]
 }
