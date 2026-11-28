@@ -2,11 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "minimumReleaseAge": "1 day",
   "internalChecksFilter": "strict",
+  "postUpdateOptions": ["gomodUpdateImportPaths", "gomodTidy"],
   "timezone": "Europe/Dublin",
   "env": {
-    "GOPRIVATE": "github.com/sneat-co/*,github.com/datatug/*",
-    "GONOPROXY": "github.com/sneat-co/*,github.com/datatug/*",
-    "GONOSUMDB": "github.com/sneat-co/*,github.com/datatug/*"
+    "GOPRIVATE": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*",
+    "GONOPROXY": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*",
+    "GONOSUMDB": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*"
   },
   "schedule": [
     "* 0-3 * * 1"
@@ -103,6 +104,13 @@
       "matchPackageNames": ["github.com/sneat-co/**", "github.com/dal-go/**", "github.com/strongo/**", "github.com/datatug/**", "github.com/ingitdb/**", "github.com/bots-go-framework/**"],
       "matchUpdateTypes": ["digest"],
       "enabled": false
+    },
+    {
+      "description": "Third-party Go major updates rewrite .go import paths (gomodUpdateImportPaths), so they open a PR for review instead of auto-merging. Our own modules stay ungated, as the fleet must run their latest release.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["*", "!github.com/sneat-co/**", "!github.com/dal-go/**", "!github.com/strongo/**", "!github.com/datatug/**", "!github.com/ingitdb/**", "!github.com/bots-go-framework/**"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
     }
   ]
 }
