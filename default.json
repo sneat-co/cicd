@@ -104,6 +104,12 @@
       "matchPackageNames": ["github.com/sneat-co/**", "github.com/dal-go/**", "github.com/strongo/**", "github.com/datatug/**", "github.com/ingitdb/**", "github.com/bots-go-framework/**"],
       "matchUpdateTypes": ["digest"],
       "enabled": false
+    },
+    {
+      "description": "Go major updates rewrite .go import paths (gomodUpdateImportPaths), so they open a PR for review instead of auto-merging.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
     }
   ]
 }
