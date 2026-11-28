@@ -2,12 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "minimumReleaseAge": "1 day",
   "internalChecksFilter": "strict",
-  "postUpdateOptions": ["gomodTidy"],
+  "postUpdateOptions": ["gomodUpdateImportPaths", "gomodTidy"],
   "timezone": "Europe/Dublin",
   "env": {
-    "GOPRIVATE": "github.com/sneat-co/*,github.com/datatug/*",
-    "GONOPROXY": "github.com/sneat-co/*,github.com/datatug/*",
-    "GONOSUMDB": "github.com/sneat-co/*,github.com/datatug/*"
+    "GOPRIVATE": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*",
+    "GONOPROXY": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*",
+    "GONOSUMDB": "github.com/sneat-co/*,github.com/datatug/*,github.com/sneat-dev/*"
   },
   "schedule": [
     "* 0-3 * * 1"
