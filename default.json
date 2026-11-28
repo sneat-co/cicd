@@ -106,8 +106,9 @@
       "enabled": false
     },
     {
-      "description": "Go major updates rewrite .go import paths (gomodUpdateImportPaths), so they open a PR for review instead of auto-merging.",
+      "description": "Third-party Go major updates rewrite .go import paths (gomodUpdateImportPaths), so they open a PR for review instead of auto-merging. Our own modules stay ungated, as the fleet must run their latest release.",
       "matchManagers": ["gomod"],
+      "matchPackageNames": ["*", "!github.com/sneat-co/**", "!github.com/dal-go/**", "!github.com/strongo/**", "!github.com/datatug/**", "!github.com/ingitdb/**", "!github.com/bots-go-framework/**"],
       "matchUpdateTypes": ["major"],
       "automerge": false
     }
