@@ -103,6 +103,11 @@
       "matchPackageNames": ["github.com/sneat-co/**", "github.com/dal-go/**", "github.com/strongo/**", "github.com/datatug/**", "github.com/ingitdb/**", "github.com/bots-go-framework/**"],
       "matchUpdateTypes": ["digest"],
       "enabled": false
+    },
+    {
+      "description": "Hold firebase below 13 until @capacitor-firebase/authentication and the @sneat auth libraries accept it: they peer on firebase 12, and no CI job exercises sign-in.",
+      "matchPackageNames": ["firebase"],
+      "allowedVersions": "<13.0.0"
     }
   ]
 }
