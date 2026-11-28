@@ -106,10 +106,12 @@
       "enabled": false
     },
     {
-      "description": "Third-party Go major updates never auto-merge: go mod tidy can rewrite a v2+ bump back to the old major, so the PR must be checked by a person. Our own modules stay ungated, as the fleet must run their latest release.",
+      "description": "Go major updates from v1 or later change the module path (/v2, /v3 ...). Renovate does not rewrite imports, so go mod tidy can quietly fall back to the old major. These PRs get their own group and never auto-merge, for our own modules too. v0 to v1 keeps the path and is not matched.",
       "matchManagers": ["gomod"],
-      "matchPackageNames": ["*", "!github.com/sneat-co/**", "!github.com/dal-go/**", "!github.com/strongo/**", "!github.com/datatug/**", "!github.com/ingitdb/**", "!github.com/bots-go-framework/**"],
       "matchUpdateTypes": ["major"],
+      "matchCurrentVersion": ">=1.0.0",
+      "groupName": "go module path majors",
+      "groupSlug": "go-module-path-majors",
       "automerge": false
     }
   ]
