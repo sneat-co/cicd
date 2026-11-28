@@ -96,6 +96,12 @@
         "*"
       ],
       "automerge": true
+    },
+    {
+      "description": "Go modules move by release tag, never by commit digest (founder, 2026-11-28; see sneat-co/sneat-core-modules#454). A module required at a pseudo-version gets its next release tag proposed instead.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
     }
   ]
 }
