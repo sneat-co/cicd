@@ -106,13 +106,20 @@
       "enabled": false
     },
     {
-      "description": "Go major updates from v1 or later change the module path (/v2, /v3 ...). Renovate does not rewrite imports, so go mod tidy can quietly fall back to the old major. These PRs get their own group and never auto-merge, for our own modules too. v0 to v1 keeps the path and is not matched.",
+      "description": "Go major updates from v1 or later change the module path (/v2, /v3 ...). Renovate does not rewrite imports here and skips go mod tidy on majors, so CI fails until a person migrates the code. These PRs get their own group and never auto-merge, for our own modules too.",
       "matchManagers": ["gomod"],
       "matchUpdateTypes": ["major"],
       "matchCurrentVersion": ">=1.0.0",
       "groupName": "go module path majors",
       "groupSlug": "go-module-path-majors",
       "automerge": false
+    },
+    {
+      "description": "v0 to v1 keeps the module path. Renovate skips go mod tidy on majors unless gomodUpdateImportPaths is set; for a new major below 2 that option installs and runs nothing, it only lets tidy run, so these bumps pass the go.mod tidy check and can auto-merge.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["major"],
+      "matchNewValue": "/^v1\\./",
+      "postUpdateOptions": ["gomodUpdateImportPaths"]
     }
   ]
 }
