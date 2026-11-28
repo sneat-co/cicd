@@ -96,6 +96,13 @@
         "*"
       ],
       "automerge": true
+    },
+    {
+      "description": "Go modules move by release tag, never by commit digest (founder, 2026-11-28; see sneat-co/sneat-core-modules#454). Scoped to our own orgs, which tag their releases: a third-party module with no tags can still only move by digest. A module required at a pseudo-version gets its next release tag proposed instead.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/sneat-co/**", "github.com/dal-go/**", "github.com/strongo/**", "github.com/datatug/**", "github.com/ingitdb/**", "github.com/bots-go-framework/**"],
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
     }
   ]
 }
